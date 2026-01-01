@@ -22,10 +22,21 @@ jobs:
 
       - name: Ensure Android INTERNET permission
         run: |
-          MANIFEST="build_app/android/app/src/main/AndroidManifest.xml"
-          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-            sed -i 's/<manifest /<manifest>\n    <uses-permission android:name="android.permission.INTERNET" \/>\n\n<manifest /' "$MANIFEST" || true
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("build_app/android/app/src/main/AndroidManifest.xml")
+          xml = p.read_text(encoding="utf-8")
+
+          if "android.permission.INTERNET" not in xml:
+              m = re.search(r"<manifest[^>]*>", xml)
+              if not m:
+                  raise SystemExit("Manifest tag not found")
+              insert = '\n    <uses-permission android:name="android.permission.INTERNET"/>\n'
+              xml = xml[:m.end()] + insert + xml[m.end():]
+              p.write_text(xml, encoding="utf-8")
+          PY
 
       # Copy your app code into the scaffold
       - name: Copy sources
