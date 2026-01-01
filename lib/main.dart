@@ -334,7 +334,7 @@ class Asset {
           final ohlc = await _fetchCoinGeckoOhlcDaily(
             coinId!,
             vsCurrency!,
-            days: 370,
+            days: 365,
           );
 
           final dailyCandles = ohlc
