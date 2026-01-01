@@ -154,7 +154,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             context: context,
             isScrollControlled: true,
             showDragHandle: true,
-            builder: (_) => const AddAssetSheet(),
+            builder: (context) {
+  return SafeArea(
+    child: Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: const AddAssetSheet(),
+    ),
+  );
+},
           );
           if (added != null) {
             setState(() {
