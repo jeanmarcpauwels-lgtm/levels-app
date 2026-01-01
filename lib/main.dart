@@ -26,14 +26,25 @@ class LevelsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Levels',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.blue,
-      ),
-      home: const DashboardScreen(),
-    );
+  title: 'Levels',
+  debugShowCheckedModeBanner: false,
+
+  themeMode: ThemeMode.dark,
+
+  theme: ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.light,
+    colorSchemeSeed: Colors.blue,
+  ),
+
+  darkTheme: ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    colorSchemeSeed: Colors.blue,
+  ),
+
+  home: const DashboardScreen(),
+);
   }
 }
 
