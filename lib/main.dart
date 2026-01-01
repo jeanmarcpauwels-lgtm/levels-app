@@ -315,14 +315,15 @@ class Asset {
             currentTimestampUtc: now,
           );
           return AssetSnapshot(
-            title: title,
-            symbol: displaySymbol,
-            unit: unit,
-            currentPrice: current,
-            currentTimestampUtc: now,
-            levels: levels,
-            dataNote: "Source: Stooq daily CSV (proxy).",
-          );
+  title: title,
+  symbol: displaySymbol,
+  unit: unit,
+  currentPrice: current,
+  currentTimestampUtc: now,
+  levels: levels,
+  dataNote: "Source: Stooq daily CSV (proxy).",
+  error: null,
+);
 
         case AssetSource.coingecko:
           final priceData =
@@ -357,14 +358,15 @@ class Asset {
           );
 
           return AssetSnapshot(
-            title: title,
-            symbol: displaySymbol,
-            unit: unit,
-            currentPrice: current,
-            currentTimestampUtc: now,
-            levels: levels,
-            dataNote: "Source: CoinGecko (/simple/price + /ohlc).",
-          );
+  title: title,
+  symbol: displaySymbol,
+  unit: unit,
+  currentPrice: current,
+  currentTimestampUtc: now,
+  levels: levels,
+  dataNote: "Source: CoinGecko (/simple/price + /ohlc).",
+  error: null,
+);
       }
     } catch (e) {
       return AssetSnapshot.error(
