@@ -995,14 +995,13 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
 
 // Nettoyage robuste (BOM, retours Windows, lignes vides)
 final lines = rawLines
-    .map((l) => l.replaceAll('\ufeff', '').trim())
-    .where((l) => l.isNotEmpty)
+    .map((l) => l.replaceAll('\ufeff', '').trim()) // trim = enlève espaces
+    .where((l) => l.isNotEmpty)                    // enlève vides + "espaces"
     .toList();
 
 if (lines.length < 2) {
-  throw Exception(
-    'Stooq CSV too short. First line: ${lines.isEmpty ? "EMPTY" : lines.first}',
-  );
+  final preview = lines.isEmpty ? 'EMPTY' : lines.take(3).join(' | ');
+  throw Exception('Stooq CSV too short. First non-empty lines: $preview');
 }
 
 final header = lines.first.toLowerCase();
