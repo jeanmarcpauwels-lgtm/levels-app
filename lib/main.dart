@@ -1,4 +1,3 @@
-\
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -107,8 +106,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefsKey);
     if (raw == null || raw.trim().isEmpty) return null;
+
     final decoded = jsonDecode(raw);
     if (decoded is! List) return null;
+
     final list = <Asset>[];
     for (final e in decoded) {
       if (e is Map<String, dynamic>) {
@@ -208,6 +209,7 @@ class Asset {
 
   // Stooq
   final String? stooqSymbol;
+
   // CoinGecko
   final String? coinId;
   final String? vsCurrency;
@@ -283,6 +285,7 @@ class Asset {
         unit: unit,
       );
     }
+
     if (sourceStr == AssetSource.coingecko.name) {
       final id = (m['coinId'] as String?) ?? '';
       final vs = (m['vsCurrency'] as String?) ?? 'usd';
@@ -295,6 +298,7 @@ class Asset {
         unit: unit,
       );
     }
+
     return null;
   }
 
@@ -303,7 +307,7 @@ class Asset {
       switch (source) {
         case AssetSource.stooq:
           final candles = await _fetchStooqDailyCandles(stooqSymbol!);
-          final current = candles.last.close; // last row (most recent after sort)
+          final current = candles.last.close; // most recent
           final now = DateTime.now().toUtc();
           final levels = computeLevelsFromDaily(
             candles: candles,
@@ -319,14 +323,25 @@ class Asset {
             levels: levels,
             dataNote: "Source: Stooq daily CSV (proxy).",
           );
+
         case AssetSource.coingecko:
-          final priceData = await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
+          final priceData =
+              await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
           final current = priceData.price;
           final now = priceData.timestampUtc;
-          final ohlc = await _fetchCoinGeckoOhlcDaily(coinId!, vsCurrency!, days: 370);
+
+          final ohlc = await _fetchCoinGeckoOhlcDaily(
+            coinId!,
+            vsCurrency!,
+            days: 370,
+          );
+
           final dailyCandles = ohlc
               .map((e) => Candle(
-                    date: DateTime.fromMillisecondsSinceEpoch(e.timestampMs, isUtc: true),
+                    date: DateTime.fromMillisecondsSinceEpoch(
+                      e.timestampMs,
+                      isUtc: true,
+                    ),
                     open: e.open,
                     high: e.high,
                     low: e.low,
@@ -334,11 +349,13 @@ class Asset {
                   ))
               .toList()
             ..sort((a, b) => a.date.compareTo(b.date));
+
           final levels = computeLevelsFromDaily(
             candles: dailyCandles,
             currentPrice: current,
             currentTimestampUtc: now,
           );
+
           return AssetSnapshot(
             title: title,
             symbol: displaySymbol,
@@ -363,7 +380,7 @@ class Asset {
 enum AssetSource { stooq, coingecko }
 
 class Candle {
-  final DateTime date; // UTC
+  final DateTime date; // UTC midnight
   final double open;
   final double high;
   final double low;
@@ -404,6 +421,7 @@ ComputedLevels computeLevelsFromDaily({
   }
 
   final last = candles.last;
+
   final daily = RangeLevel(
     label: "Daily (last)",
     start: DateTime.utc(last.date.year, last.date.month, last.date.day),
@@ -414,6 +432,7 @@ ComputedLevels computeLevelsFromDaily({
 
   final lastIso = isoWeek(last.date);
   final prevIso = _prevIsoWeek(lastIso);
+
   final weeklyCandles = candles.where((c) {
     final w = isoWeek(c.date);
     return w.year == prevIso.year && w.week == prevIso.week;
@@ -421,7 +440,6 @@ ComputedLevels computeLevelsFromDaily({
 
   RangeLevel weekly;
   if (weeklyCandles.isEmpty) {
-    // If we don't have the previous ISO week (rare with short history), fall back to last 5 candles
     final tail = candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
     weekly = RangeLevel(
       label: "Weekly (fallback 5d)",
@@ -442,6 +460,7 @@ ComputedLevels computeLevelsFromDaily({
 
   final y0 = DateTime.utc(last.date.year, 1, 1);
   final ytdCandles = candles.where((c) => !c.date.isBefore(y0)).toList();
+
   final ytd = RangeLevel(
     label: "YTD",
     start: y0,
@@ -474,7 +493,11 @@ class ComputedLevels {
     required this.currentTimestampUtc,
   });
 
-  Zone verdictFor(RangeLevel r, {double buyThreshold = 0.25, double sellThreshold = 0.75}) {
+  Zone verdictFor(
+    RangeLevel r, {
+    double buyThreshold = 0.25,
+    double sellThreshold = 0.75,
+  }) {
     final pos = r.position(currentPrice);
     if (pos == null) return Zone.neutral;
     if (pos <= buyThreshold) return Zone.buy;
@@ -482,7 +505,10 @@ class ComputedLevels {
     return Zone.neutral;
   }
 
-  Zone overallVerdict({double buyThreshold = 0.25, double sellThreshold = 0.75}) {
+  Zone overallVerdict({
+    double buyThreshold = 0.25,
+    double sellThreshold = 0.75,
+  }) {
     final v = [
       verdictFor(daily, buyThreshold: buyThreshold, sellThreshold: sellThreshold),
       verdictFor(weekly, buyThreshold: buyThreshold, sellThreshold: sellThreshold),
@@ -490,6 +516,7 @@ class ComputedLevels {
     ];
     final buy = v.where((e) => e == Zone.buy).length;
     final sell = v.where((e) => e == Zone.sell).length;
+
     if (buy >= 2) return Zone.buy;
     if (sell >= 2) return Zone.sell;
     return Zone.neutral;
@@ -568,8 +595,10 @@ class AssetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final titleStyle = theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
-    final priceStyle = theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+    final titleStyle =
+        theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
+    final priceStyle =
+        theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
 
     return Card(
       elevation: 0,
@@ -582,7 +611,8 @@ class AssetCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text('${snapshot.symbol} • ${snapshot.title}', style: titleStyle),
+                  child: Text('${snapshot.symbol} • ${snapshot.title}',
+                      style: titleStyle),
                 ),
                 if (snapshot.error == null)
                   _ZoneChip(
@@ -595,13 +625,15 @@ class AssetCard extends StatelessWidget {
             if (snapshot.error != null)
               Text(
                 'Erreur source: ${snapshot.error}',
-                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.error),
               )
             else
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}', style: priceStyle),
+                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}',
+                      style: priceStyle),
                   const SizedBox(width: 10),
                   Opacity(
                     opacity: 0.7,
@@ -618,7 +650,8 @@ class AssetCard extends StatelessWidget {
               const SizedBox(height: 10),
               Opacity(
                 opacity: 0.75,
-                child: Text(snapshot.dataNote ?? '', style: theme.textTheme.bodySmall),
+                child: Text(snapshot.dataNote ?? '',
+                    style: theme.textTheme.bodySmall),
               ),
             ],
           ],
@@ -634,14 +667,25 @@ class _RangeBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Column(
       children: [
-        _RangeRow(level: levels.daily, current: levels.currentPrice, zone: levels.verdictFor(levels.daily)),
+        _RangeRow(
+          level: levels.daily,
+          current: levels.currentPrice,
+          zone: levels.verdictFor(levels.daily),
+        ),
         const SizedBox(height: 10),
-        _RangeRow(level: levels.weekly, current: levels.currentPrice, zone: levels.verdictFor(levels.weekly)),
+        _RangeRow(
+          level: levels.weekly,
+          current: levels.currentPrice,
+          zone: levels.verdictFor(levels.weekly),
+        ),
         const SizedBox(height: 10),
-        _RangeRow(level: levels.ytd, current: levels.currentPrice, zone: levels.verdictFor(levels.ytd)),
+        _RangeRow(
+          level: levels.ytd,
+          current: levels.currentPrice,
+          zone: levels.verdictFor(levels.ytd),
+        ),
       ],
     );
   }
@@ -694,7 +738,13 @@ class _RangeRow extends StatelessWidget {
         Row(
           children: [
             Expanded(child: Text('Low  ${_fmt(level.low)}', style: medium)),
-            Expanded(child: Text('High ${_fmt(level.high)}', style: medium, textAlign: TextAlign.right)),
+            Expanded(
+              child: Text(
+                'High ${_fmt(level.high)}',
+                style: medium,
+                textAlign: TextAlign.right,
+              ),
+            ),
           ],
         ),
       ],
@@ -736,7 +786,6 @@ class _ZoneChip extends StatelessWidget {
     );
   }
 }
-
 
 class AddAssetSheet extends StatefulWidget {
   const AddAssetSheet({super.key});
@@ -860,7 +909,9 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
               Expanded(
                 child: TextField(
                   controller: _unitCtrl,
-                  decoration: const InputDecoration(labelText: 'Unité (ex: $, €)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Unité (ex: \$, €)',
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -906,12 +957,10 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
   }
 }
 
-
 /// --- Data fetchers ---
 
 Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
-  // Stooq provides a CSV download link from the historical page (Download data in csv file).
-  // A commonly used pattern is: https://stooq.com/q/d/l/?s=<symbol>&i=d
+  // Stooq CSV pattern: https://stooq.com/q/d/l/?s=<symbol>&i=d
   final url = Uri.parse('https://stooq.com/q/d/l/?s=$symbol&i=d');
   final resp = await http.get(url, headers: {
     'User-Agent': 'Mozilla/5.0 (LevelsApp)',
@@ -919,23 +968,29 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
   if (resp.statusCode != 200) {
     throw Exception('Stooq HTTP ${resp.statusCode}');
   }
+
   final lines = const LineSplitter().convert(resp.body);
   if (lines.isEmpty || !lines.first.toLowerCase().startsWith('date')) {
     throw Exception('Stooq CSV unexpected format.');
   }
+
   final candles = <Candle>[];
   for (int i = 1; i < lines.length; i++) {
     final line = lines[i].trim();
     if (line.isEmpty) continue;
     final parts = line.split(',');
     if (parts.length < 5) continue;
+
     final date = DateTime.tryParse(parts[0]);
     if (date == null) continue;
+
     final open = double.tryParse(parts[1]) ?? double.nan;
     final high = double.tryParse(parts[2]) ?? double.nan;
     final low = double.tryParse(parts[3]) ?? double.nan;
     final close = double.tryParse(parts[4]) ?? double.nan;
+
     if ([open, high, low, close].any((x) => x.isNaN)) continue;
+
     candles.add(Candle(
       date: DateTime.utc(date.year, date.month, date.day),
       open: open,
@@ -944,38 +999,49 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
       close: close,
     ));
   }
+
   candles.sort((a, b) => a.date.compareTo(b.date));
+  if (candles.isEmpty) throw Exception('Stooq returned empty candles.');
   return candles;
 }
 
 Future<SimplePrice> _fetchCoinGeckoSimplePrice(String id, String vs) async {
-  // CoinGecko endpoint /simple/price is documented; some access models may require keys depending on plan.
-  // We attempt the public endpoint first.
   final url = Uri.parse(
     'https://api.coingecko.com/api/v3/simple/price?ids=$id&vs_currencies=$vs&include_last_updated_at=true',
   );
   final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (LevelsApp)'});
   if (resp.statusCode != 200) throw Exception('CoinGecko HTTP ${resp.statusCode}');
+
   final jsonMap = json.decode(resp.body) as Map<String, dynamic>;
   final coin = jsonMap[id] as Map<String, dynamic>?;
   if (coin == null) throw Exception('CoinGecko: missing coin id.');
+
   final price = (coin[vs] as num).toDouble();
   final ts = (coin['last_updated_at'] as num?)?.toInt();
+
   final dt = ts == null
       ? DateTime.now().toUtc()
       : DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true);
+
   return SimplePrice(price, dt);
 }
 
-Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(String id, String vs, {int days = 370}) async {
-  // Endpoint showcase lists /coins/{id}/ohlc. We try the public base URL.
-  final url = Uri.parse('https://api.coingecko.com/api/v3/coins/$id/ohlc?vs_currency=$vs&days=$days');
+Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
+  String id,
+  String vs, {
+  int days = 370,
+}) async {
+  final url = Uri.parse(
+    'https://api.coingecko.com/api/v3/coins/$id/ohlc?vs_currency=$vs&days=$days',
+  );
   final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (LevelsApp)'});
   if (resp.statusCode != 200) {
     throw Exception('CoinGecko OHLC HTTP ${resp.statusCode}');
   }
+
   final arr = json.decode(resp.body);
   if (arr is! List) throw Exception('CoinGecko OHLC unexpected format.');
+
   return arr.map<OhlcPoint>((e) {
     final l = (e as List).cast<num>();
     return OhlcPoint(
@@ -1011,23 +1077,24 @@ class IsoWeek {
 }
 
 IsoWeek isoWeek(DateTime dateUtc) {
-  // Based on ISO-8601: week starts Monday, week 1 has Jan 4th.
+  // ISO-8601: week starts Monday, week 1 has Jan 4th.
   final d = DateTime.utc(dateUtc.year, dateUtc.month, dateUtc.day);
   final dayOfWeek = d.weekday; // Mon=1..Sun=7
   final thursday = d.add(Duration(days: 4 - dayOfWeek));
   final weekYear = thursday.year;
+
   final firstThursday = DateTime.utc(weekYear, 1, 4);
   final firstThursdayDay = firstThursday.weekday;
   final firstWeekThursday = firstThursday.add(Duration(days: 4 - firstThursdayDay));
+
   final diffDays = thursday.difference(firstWeekThursday).inDays;
   final week = 1 + (diffDays ~/ 7);
+
   return IsoWeek(weekYear, week);
 }
 
 IsoWeek _prevIsoWeek(IsoWeek w) {
   if (w.week > 1) return IsoWeek(w.year, w.week - 1);
-  // Week 1 -> previous year last ISO week
   final dec28 = DateTime.utc(w.year - 1, 12, 28);
-  final last = isoWeek(dec28);
-  return last;
+  return isoWeek(dec28);
 }
