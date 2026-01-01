@@ -81,7 +81,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Asset> assets = [];
 
   late Future<List<AssetSnapshot>> _snapshots;
-
+  
+Future<void> _removeAssetAt(int index) async {
+  setState(() {
+    assets.removeAt(index);
+    _snapshots = _loadAll();
+  });
+  await _saveAssetsToPrefs(assets);
+}
   @override
   void initState() {
     super.initState();
