@@ -20,6 +20,13 @@ jobs:
       - name: Create Flutter project scaffold
         run: flutter create -t app build_app
 
+      - name: Ensure Android INTERNET permission
+        run: |
+          MANIFEST="build_app/android/app/src/main/AndroidManifest.xml"
+          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+            sed -i 's/<manifest /<manifest>\n    <uses-permission android:name="android.permission.INTERNET" \/>\n\n<manifest /' "$MANIFEST" || true
+          fi
+
       # Copy your app code into the scaffold
       - name: Copy sources
         run: |
