@@ -155,6 +155,70 @@ Future<void> _removeAssetAt(int index) async {
           ),
         ],
       ),
+      body: FutureBuilder<List<AssetSnapshot>>(
+  future: _snapshots,
+  builder: (context, snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (snapshot.hasError) {
+      return Center(
+        child: Text(
+          'Erreur: ${snapshot.error}',
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      );
+    }
+
+    final data = snapshot.data;
+    if (data == null || data.isEmpty) {
+      return const Center(child: Text('Aucun actif'));
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 96),
+      itemCount: data.length,
+      itemBuilder: (context, index) {
+        final snap = data[index];
+
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: ListTile(
+            title: Text(snap.title),
+            subtitle: Text(snap.displaySymbol),
+            trailing: IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('Supprimer'),
+                    content: const Text('Supprimer cet actif ?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Annuler'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Supprimer'),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (ok == true) {
+                  await _removeAssetAt(index);
+                }
+              },
+            ),
+          ),
+        );
+      },
+    );
+  },
+),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           final added = await showModalBottomSheet<Asset>(
