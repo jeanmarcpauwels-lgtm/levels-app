@@ -971,10 +971,26 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
     throw Exception('Stooq HTTP ${resp.statusCode}');
   }
 
-  final lines = const LineSplitter().convert(resp.body);
-  if (lines.isEmpty || !lines.first.toLowerCase().startsWith('date')) {
-    throw Exception('Stooq CSV unexpected format.');
-  }
+  final rawLines = const LineSplitter().convert(resp.body);
+
+// Nettoyage robuste (BOM, retours Windows, lignes vides)
+final lines = rawLines
+    .map((l) => l.replaceAll('\ufeff', '').trim())
+    .where((l) => l.isNotEmpty)
+    .toList();
+
+if (lines.length < 2) {
+  throw Exception(
+    'Stooq CSV too short. First line: ${lines.isEmpty ? "EMPTY" : lines.first}',
+  );
+}
+
+final header = lines.first.toLowerCase();
+if (!header.contains('date') || !header.contains('close')) {
+  throw Exception(
+    'Stooq CSV invalid header. Preview: ${lines.take(5).join(" | ")}',
+  );
+}
 
   final candles = <Candle>[];
   for (int i = 1; i < lines.length; i++) {
