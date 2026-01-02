@@ -6,48 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ===== ISO WEEK HELPERS (À METTRE EN HAUT DU FICHIER) =====
-
-class IsoWeek {
-  final int year;
-  final int week;
-  const IsoWeek(this.year, this.week);
-}
-
-IsoWeek isoWeek(DateTime dateUtc) {
-  final d = DateTime.utc(
-    dateUtc.year,
-    dateUtc.month,
-    dateUtc.day,
-  );
-
-  // ISO-8601 : semaine basée sur le jeudi
-  final dayOfWeek = d.weekday; // 1 = lundi, 7 = dimanche
-  final thursday = d.add(Duration(days: 4 - dayOfWeek));
-  final weekYear = thursday.year;
-
-  // Le jeudi de la semaine 1 est celui de la semaine contenant le 4 janvier
-  final firstThursday = DateTime.utc(weekYear, 1, 4);
-  final firstThursdayWeekday = firstThursday.weekday;
-  final firstWeekThursday =
-      firstThursday.add(Duration(days: 4 - firstThursdayWeekday));
-
-  final diffDays = thursday.difference(firstWeekThursday).inDays;
-  final week = 1 + (diffDays ~/ 7);
-
-  return IsoWeek(weekYear, week);
-}
-
-IsoWeek prevIsoWeek(IsoWeek w) {
-  if (w.week > 1) {
-    return IsoWeek(w.year, w.week - 1);
-  }
-  // Semaine précédente = semaine ISO du 28 décembre de l’année précédente
-  final dec28 = DateTime.utc(w.year - 1, 12, 28);
-  return isoWeek(dec28);
-}
-
-// ===== FIN ISO WEEK HELPERS =====
 void main() {
   runApp(const LevelsApp());
 }
@@ -197,70 +155,6 @@ Future<void> _removeAssetAt(int index) async {
           ),
         ],
       ),
-      body: FutureBuilder<List<AssetSnapshot>>(
-  future: _snapshots,
-  builder: (context, snapshot) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (snapshot.hasError) {
-      return Center(
-        child: Text(
-          'Erreur: ${snapshot.error}',
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
-        ),
-      );
-    }
-
-    final data = snapshot.data;
-    if (data == null || data.isEmpty) {
-      return const Center(child: Text('Aucun actif'));
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 96),
-      itemCount: data.length,
-      itemBuilder: (context, index) {
-        final snap = data[index];
-
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: ListTile(
-            title: Text(snap.title),
-            subtitle: Text(snap.displaySymbol),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () async {
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('Supprimer'),
-                    content: const Text('Supprimer cet actif ?'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Annuler'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('Supprimer'),
-                      ),
-                    ],
-                  ),
-                );
-
-                if (ok == true) {
-                  await _removeAssetAt(index);
-                }
-              },
-            ),
-          ),
-        );
-      },
-    );
-  },
-),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           final added = await showModalBottomSheet<Asset>(
@@ -288,7 +182,37 @@ Future<void> _removeAssetAt(int index) async {
         },
         child: const Icon(Icons.add),
       ),
-      
+      body: FutureBuilder<List<AssetSnapshot>>(
+        future: _snapshots,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Erreur: ${snap.error}'),
+              ),
+            );
+          }
+          final data = snap.data ?? [];
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              padding: const EdgeInsets.all(12),
+              children: [
+                for (final s in data) AssetCard(snapshot: s),
+                const SizedBox(height: 24),
+                const _Footnote(),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
 
 class _Footnote extends StatelessWidget {
   const _Footnote();
@@ -655,7 +579,6 @@ enum Zone { buy, neutral, sell }
 class AssetSnapshot {
   final String title;
   final String symbol;
-  final String displaySymbol;
   final String unit;
 
   final double? currentPrice;
@@ -668,7 +591,6 @@ class AssetSnapshot {
   AssetSnapshot({
     required this.title,
     required this.symbol,
-    required this.displaySymbol,
     required this.unit,
     required this.currentPrice,
     required this.currentTimestampUtc,
@@ -680,14 +602,12 @@ class AssetSnapshot {
   factory AssetSnapshot.error({
     required String title,
     required String symbol,
-    required String displaySymbol,
     required String unit,
     required String error,
   }) =>
       AssetSnapshot(
         title: title,
         symbol: symbol,
-        displaySymbol: displaySymbol,
         unit: unit,
         currentPrice: null,
         currentTimestampUtc: null,
@@ -1192,4 +1112,33 @@ String _fmtDate(DateTime utc) {
   return DateFormat('yyyy-MM-dd').format(local);
 }
 
+/// --- ISO week helpers (no external dependency) ---
 
+class IsoWeek {
+  final int year;
+  final int week;
+  const IsoWeek(this.year, this.week);
+}
+
+IsoWeek isoWeek(DateTime dateUtc) {
+  // ISO-8601: week starts Monday, week 1 has Jan 4th.
+  final d = DateTime.utc(dateUtc.year, dateUtc.month, dateUtc.day);
+  final dayOfWeek = d.weekday; // Mon=1..Sun=7
+  final thursday = d.add(Duration(days: 4 - dayOfWeek));
+  final weekYear = thursday.year;
+
+  final firstThursday = DateTime.utc(weekYear, 1, 4);
+  final firstThursdayDay = firstThursday.weekday;
+  final firstWeekThursday = firstThursday.add(Duration(days: 4 - firstThursdayDay));
+
+  final diffDays = thursday.difference(firstWeekThursday).inDays;
+  final week = 1 + (diffDays ~/ 7);
+
+  return IsoWeek(weekYear, week);
+}
+
+IsoWeek _prevIsoWeek(IsoWeek w) {
+  if (w.week > 1) return IsoWeek(w.year, w.week - 1);
+  final dec28 = DateTime.utc(w.year - 1, 12, 28);
+  return isoWeek(dec28);
+}
