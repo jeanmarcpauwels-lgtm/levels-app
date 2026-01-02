@@ -19,12 +19,4 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.13.1
 
-flutter:
-  uses-material-design: true
-  assets:
-    - assets/icon/con.png
 
-flutter_icons:
-  android: true
-  ios: false
-  image_path: assets/icon/con.png
