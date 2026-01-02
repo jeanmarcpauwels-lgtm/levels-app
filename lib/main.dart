@@ -10,16 +10,6 @@ void main() {
   runApp(const InvestApp());
 }
 
-/// Invest (proxy approach, fully automatic):
-/// - NQ.F: Stooq daily OHLC CSV (proxy)
-/// - XAUUSD: Stooq daily OHLC CSV (proxy)
-/// - BTC: CoinGecko OHLC + current price
-///
-/// It computes and displays:
-/// - Daily (last complete daily candle): high/low + date
-/// - Weekly (previous ISO week): high/low + start/end dates
-/// - YTD: high/low + since Jan 1
-/// plus a "range position" bar and buy/neutral/sell badges.
 class InvestApp extends StatelessWidget {
   const InvestApp({super.key});
 
@@ -77,7 +67,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Asset> assets = [];
   late Future<List<AssetSnapshot>> _snapshots;
 
-  static const _prefsKey = 'assets_v1';
+  static const String _prefsKey = 'assets_v1';
 
   @override
   void initState() {
@@ -93,6 +83,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<List<AssetSnapshot>> _loadAll() async {
     final results = <AssetSnapshot>[];
     for (final a in assets) {
+      // Small pacing to reduce CoinGecko 429 risk.
+      if (results.isNotEmpty) {
+        await Future.delayed(const Duration(milliseconds: 350));
+      }
       results.add(await a.fetchAndCompute());
     }
     return results;
@@ -102,12 +96,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _snapshots = _loadAll());
   }
 
-  Future<void> _removeAssetBySymbol(String symbol) async {
+  Future<void> _removeAssetByKey(String assetKey) async {
     setState(() {
-      assets.removeWhere((a) => a.displaySymbol == symbol);
+      assets.removeWhere((a) => a.key == assetKey);
       _snapshots = _loadAll();
     });
     await _saveAssetsToPrefs(assets);
+  }
+
+  Future<void> _confirmAndRemove(String assetKey, String label) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete'),
+        content: Text('Remove "$label" ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      await _removeAssetByKey(assetKey);
+    }
   }
 
   Future<void> _saveAssetsToPrefs(List<Asset> assets) async {
@@ -142,17 +160,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            // IMPORTANT: ajoute bien l’asset dans pubspec.yaml :
-            // flutter:
-            //   assets:
-            //     - assets/icon/Icon.png
-            Image.asset('assets/icon/Icon.png', width: 24, height: 24),
-            const SizedBox(width: 10),
-            const Text('Invest'),
-          ],
-        ),
+        title: const Text('Invest'),
         actions: [
           IconButton(
             onPressed: _refresh,
@@ -178,8 +186,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               );
             },
           );
+
           if (added != null) {
             setState(() {
+              // Avoid duplicates by key.
+              assets.removeWhere((a) => a.key == added.key);
               assets = [...assets, added];
               _snapshots = _loadAll();
             });
@@ -198,7 +209,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text('Erreur: ${snap.error}'),
+                child: Text('Error: ${snap.error}'),
               ),
             );
           }
@@ -212,7 +223,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 for (final s in data)
                   AssetCard(
                     snapshot: s,
-                    onDelete: () => _removeAssetBySymbol(s.symbol),
+                    onDelete: () => _confirmAndRemove(
+                      s.assetKey,
+                      '${s.symbol} - ${s.title}',
+                    ),
                   ),
                 const SizedBox(height: 24),
                 const _Footnote(),
@@ -234,8 +248,8 @@ class _Footnote extends StatelessWidget {
     return Opacity(
       opacity: 0.8,
       child: Text(
-        "Proxies gratuits (Stooq + CoinGecko). Données non 'broker-grade'.\n"
-        "Daily = dernière bougie journalière complète. Weekly = semaine ISO précédente. YTD = depuis le 1er janvier.",
+        'Free proxies (Stooq + CoinGecko). Data is not broker-grade.\n'
+        'Daily = last complete daily candle. Weekly = previous ISO week. YTD = since Jan 1.',
         style: textStyle,
       ),
     );
@@ -296,6 +310,13 @@ class Asset {
           unit: unit,
         );
 
+  String get key {
+    if (source == AssetSource.stooq) {
+      return 'stooq:${(stooqSymbol ?? '').toLowerCase()}|${displaySymbol.toUpperCase()}';
+    }
+    return 'cg:${(coinId ?? '').toLowerCase()}|${(vsCurrency ?? '').toLowerCase()}|${displaySymbol.toUpperCase()}';
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'source': source.name,
@@ -345,8 +366,8 @@ class Asset {
   Future<AssetSnapshot> fetchAndCompute() async {
     try {
       if (source == AssetSource.stooq) {
-        final candles = await _fetchStooqDailyCandles(stooqSymbol!);
-
+        // Extra robust retries for NQ.F issue (empty body, transient blocking).
+        final candles = await _fetchStooqDailyCandlesWithRetry(stooqSymbol!);
         final current = candles.last.close;
         final now = DateTime.now().toUtc();
 
@@ -357,60 +378,59 @@ class Asset {
         );
 
         return AssetSnapshot(
+          assetKey: key,
           title: title,
           symbol: displaySymbol,
           unit: unit,
           currentPrice: current,
           currentTimestampUtc: now,
           levels: levels,
-          dataNote: "Source: Stooq daily CSV (proxy).",
+          dataNote: 'Source: Stooq daily CSV (proxy).',
+          error: null,
+        );
+      } else {
+        final priceData = await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
+        final current = priceData.price;
+        final now = priceData.timestampUtc;
+
+        final ohlc = await _fetchCoinGeckoOhlcDaily(
+          coinId!,
+          vsCurrency!,
+          days: 365,
+        );
+
+        final dailyCandles = ohlc
+            .map((e) => Candle(
+                  date: DateTime.fromMillisecondsSinceEpoch(e.timestampMs, isUtc: true),
+                  open: e.open,
+                  high: e.high,
+                  low: e.low,
+                  close: e.close,
+                ))
+            .toList()
+          ..sort((a, b) => a.date.compareTo(b.date));
+
+        final levels = computeLevelsFromDaily(
+          candles: dailyCandles,
+          currentPrice: current,
+          currentTimestampUtc: now,
+        );
+
+        return AssetSnapshot(
+          assetKey: key,
+          title: title,
+          symbol: displaySymbol,
+          unit: unit,
+          currentPrice: current,
+          currentTimestampUtc: now,
+          levels: levels,
+          dataNote: 'Source: CoinGecko (/simple/price + /ohlc).',
           error: null,
         );
       }
-
-      // CoinGecko
-      final priceData = await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
-      final current = priceData.price;
-      final now = priceData.timestampUtc;
-
-      final ohlc = await _fetchCoinGeckoOhlcDaily(
-        coinId!,
-        vsCurrency!,
-        days: 365,
-      );
-
-      final dailyCandles = ohlc
-          .map((e) => Candle(
-                date: DateTime.fromMillisecondsSinceEpoch(
-                  e.timestampMs,
-                  isUtc: true,
-                ),
-                open: e.open,
-                high: e.high,
-                low: e.low,
-                close: e.close,
-              ))
-          .toList()
-        ..sort((a, b) => a.date.compareTo(b.date));
-
-      final levels = computeLevelsFromDaily(
-        candles: dailyCandles,
-        currentPrice: current,
-        currentTimestampUtc: now,
-      );
-
-      return AssetSnapshot(
-        title: title,
-        symbol: displaySymbol,
-        unit: unit,
-        currentPrice: current,
-        currentTimestampUtc: now,
-        levels: levels,
-        dataNote: "Source: CoinGecko (/simple/price + /ohlc).",
-        error: null,
-      );
     } catch (e) {
       return AssetSnapshot.error(
+        assetKey: key,
         title: title,
         symbol: displaySymbol,
         unit: unit,
@@ -421,7 +441,7 @@ class Asset {
 }
 
 class Candle {
-  final DateTime date; // UTC midnight
+  final DateTime date; // UTC date
   final double open;
   final double high;
   final double low;
@@ -448,23 +468,19 @@ class SimplePrice {
   SimplePrice(this.price, this.timestampUtc);
 }
 
-/// Computes:
-/// - Daily (last complete day candle) = last candle in list
-/// - Weekly previous ISO week from the last candle's date
-/// - YTD from Jan 1 of last candle's year
 ComputedLevels computeLevelsFromDaily({
   required List<Candle> candles,
   required double currentPrice,
   required DateTime currentTimestampUtc,
 }) {
   if (candles.isEmpty) {
-    throw Exception("No candles returned.");
+    throw Exception('No candles returned.');
   }
 
   final last = candles.last;
 
   final daily = RangeLevel(
-    label: "Daily (last)",
+    label: 'Daily (last)',
     start: DateTime.utc(last.date.year, last.date.month, last.date.day),
     end: DateTime.utc(last.date.year, last.date.month, last.date.day),
     high: last.high,
@@ -472,7 +488,7 @@ ComputedLevels computeLevelsFromDaily({
   );
 
   final lastIso = isoWeek(last.date);
-  final prevIso = _prevIsoWeek(lastIso);
+  final prevIso = prevIsoWeek(lastIso);
 
   final weeklyCandles = candles.where((c) {
     final w = isoWeek(c.date);
@@ -481,10 +497,9 @@ ComputedLevels computeLevelsFromDaily({
 
   RangeLevel weekly;
   if (weeklyCandles.isEmpty) {
-    final tail =
-        candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
+    final tail = candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
     weekly = RangeLevel(
-      label: "Weekly (fallback 5d)",
+      label: 'Weekly (fallback 5d)',
       start: tail.first.date,
       end: tail.last.date,
       high: tail.map((e) => e.high).reduce(math.max),
@@ -492,7 +507,7 @@ ComputedLevels computeLevelsFromDaily({
     );
   } else {
     weekly = RangeLevel(
-      label: "Weekly (prev ISO)",
+      label: 'Weekly (prev ISO)',
       start: weeklyCandles.first.date,
       end: weeklyCandles.last.date,
       high: weeklyCandles.map((e) => e.high).reduce(math.max),
@@ -504,7 +519,7 @@ ComputedLevels computeLevelsFromDaily({
   final ytdCandles = candles.where((c) => !c.date.isBefore(y0)).toList();
 
   final ytd = RangeLevel(
-    label: "YTD",
+    label: 'YTD',
     start: y0,
     end: last.date,
     high: ytdCandles.map((e) => e.high).reduce(math.max),
@@ -551,19 +566,18 @@ class ComputedLevels {
     double buyThreshold = 0.25,
     double sellThreshold = 0.75,
   }) {
-    final v1 =
-        verdictFor(daily, buyThreshold: buyThreshold, sellThreshold: sellThreshold);
-    final v2 =
-        verdictFor(weekly, buyThreshold: buyThreshold, sellThreshold: sellThreshold);
-    final v3 =
-        verdictFor(ytd, buyThreshold: buyThreshold, sellThreshold: sellThreshold);
+    final v1 = verdictFor(daily, buyThreshold: buyThreshold, sellThreshold: sellThreshold);
+    final v2 = verdictFor(weekly, buyThreshold: buyThreshold, sellThreshold: sellThreshold);
+    final v3 = verdictFor(ytd, buyThreshold: buyThreshold, sellThreshold: sellThreshold);
 
     int buy = 0;
     int sell = 0;
-    for (final v in [v1, v2, v3]) {
-      if (v == Zone.buy) buy++;
-      if (v == Zone.sell) sell++;
-    }
+    if (v1 == Zone.buy) buy++;
+    if (v2 == Zone.buy) buy++;
+    if (v3 == Zone.buy) buy++;
+    if (v1 == Zone.sell) sell++;
+    if (v2 == Zone.sell) sell++;
+    if (v3 == Zone.sell) sell++;
 
     if (buy >= 2) return Zone.buy;
     if (sell >= 2) return Zone.sell;
@@ -596,6 +610,7 @@ class RangeLevel {
 enum Zone { buy, neutral, sell }
 
 class AssetSnapshot {
+  final String assetKey;
   final String title;
   final String symbol;
   final String unit;
@@ -608,6 +623,7 @@ class AssetSnapshot {
   final String? error;
 
   AssetSnapshot({
+    required this.assetKey,
     required this.title,
     required this.symbol,
     required this.unit,
@@ -619,12 +635,14 @@ class AssetSnapshot {
   });
 
   factory AssetSnapshot.error({
+    required String assetKey,
     required String title,
     required String symbol,
     required String unit,
     required String error,
   }) =>
       AssetSnapshot(
+        assetKey: assetKey,
         title: title,
         symbol: symbol,
         unit: unit,
@@ -649,10 +667,8 @@ class AssetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final titleStyle =
-        theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
-    final priceStyle =
-        theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+    final titleStyle = theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
+    final priceStyle = theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
 
     return Card(
       elevation: 0,
@@ -665,13 +681,12 @@ class AssetCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text('${snapshot.symbol} • ${snapshot.title}',
-                      style: titleStyle),
+                  child: Text('${snapshot.symbol} - ${snapshot.title}', style: titleStyle),
                 ),
                 IconButton(
                   onPressed: onDelete,
                   icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Supprimer',
+                  tooltip: 'Delete',
                 ),
                 if (snapshot.error == null)
                   _ZoneChip(
@@ -683,21 +698,19 @@ class AssetCard extends StatelessWidget {
             const SizedBox(height: 10),
             if (snapshot.error != null)
               Text(
-                'Erreur source: ${snapshot.error}',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.error),
+                'Source error: ${snapshot.error}',
+                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
               )
             else
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}',
-                      style: priceStyle),
+                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}', style: priceStyle),
                   const SizedBox(width: 10),
                   Opacity(
                     opacity: 0.7,
                     child: Text(
-                      'maj ${_fmtTs(snapshot.currentTimestampUtc!)}',
+                      'upd ${_fmtTs(snapshot.currentTimestampUtc!)}',
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
@@ -709,8 +722,7 @@ class AssetCard extends StatelessWidget {
               const SizedBox(height: 10),
               Opacity(
                 opacity: 0.75,
-                child: Text(snapshot.dataNote ?? '',
-                    style: theme.textTheme.bodySmall),
+                child: Text(snapshot.dataNote ?? '', style: theme.textTheme.bodySmall),
               ),
             ],
           ],
@@ -765,8 +777,7 @@ class _RangeRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final small = theme.textTheme.bodySmall;
-    final medium =
-        theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700);
+    final medium = theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700);
 
     final pos = level.position(current);
     final posClamped = pos == null ? 0.5 : pos.clamp(0.0, 1.0);
@@ -778,12 +789,12 @@ class _RangeRow extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                '${level.label} • ${_fmtDate(level.start)}'
-                '${(level.end.difference(level.start).inDays == 0) ? '' : ' → ${_fmtDate(level.end)}'}',
+                '${level.label} - ${_fmtDate(level.start)}'
+                '${(level.end.difference(level.start).inDays == 0) ? '' : ' -> ${_fmtDate(level.end)}'}',
                 style: small?.copyWith(fontWeight: FontWeight.w600),
               ),
             ),
-            _ZoneChip(zone: zone),
+            _ZoneChip(zone: zone, labelPrefix: null),
           ],
         ),
         const SizedBox(height: 6),
@@ -816,7 +827,7 @@ class _ZoneChip extends StatelessWidget {
   final Zone zone;
   final String? labelPrefix;
 
-  const _ZoneChip({required this.zone, this.labelPrefix});
+  const _ZoneChip({required this.zone, required this.labelPrefix});
 
   @override
   Widget build(BuildContext context) {
@@ -825,13 +836,13 @@ class _ZoneChip extends StatelessWidget {
     String label;
     Color color;
     if (zone == Zone.buy) {
-      label = 'Achat';
+      label = 'Buy';
       color = Colors.green;
     } else if (zone == Zone.sell) {
-      label = 'Vente';
+      label = 'Sell';
       color = Colors.red;
     } else {
-      label = 'Neutre';
+      label = 'Neutral';
       color = Colors.grey;
     }
 
@@ -892,7 +903,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
     final unit = _unitCtrl.text.trim();
 
     if (title.isEmpty || key.isEmpty || disp.isEmpty) {
-      setState(() => _error = "Titre, identifiant et symbole affiché sont requis.");
+      setState(() => _error = 'Name, identifier and display symbol are required.');
       return;
     }
 
@@ -911,7 +922,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
 
     final vs = _vsCtrl.text.trim().toLowerCase();
     if (vs.isEmpty) {
-      setState(() => _error = "vs_currency requis (ex: usd).");
+      setState(() => _error = 'vs_currency required (example: usd).');
       return;
     }
 
@@ -937,40 +948,22 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Ajouter un actif',
-            style: Theme.of(context)
-                .textTheme
-                .titleLarge
-                ?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Text('Source:'),
-              const SizedBox(width: 12),
-              DropdownButton<AssetSource>(
-                value: _source,
-                items: const [
-                  DropdownMenuItem(
-                    value: AssetSource.stooq,
-                    child: Text('Stooq'),
-                  ),
-                  DropdownMenuItem(
-                    value: AssetSource.coingecko,
-                    child: Text('CoinGecko'),
-                  ),
-                ],
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _source = v);
-                },
-              ),
-            ],
+            'Add asset',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
+          SegmentedButton<AssetSource>(
+            segments: const [
+              ButtonSegment(value: AssetSource.stooq, label: Text('Stooq')),
+              ButtonSegment(value: AssetSource.coingecko, label: Text('CoinGecko')),
+            ],
+            selected: <AssetSource>{_source},
+            onSelectionChanged: (s) => setState(() => _source = s.first),
+          ),
+          const SizedBox(height: 12),
           TextField(
             controller: _titleCtrl,
-            decoration: const InputDecoration(labelText: 'Nom (ex: Nasdaq 100 Future)'),
+            decoration: const InputDecoration(labelText: 'Name (example: Nasdaq 100)'),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 10),
@@ -978,15 +971,15 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
             controller: _symbolCtrl,
             decoration: InputDecoration(
               labelText: _source == AssetSource.stooq
-                  ? 'Symbole Stooq (ex: nq.f, xauusd)'
-                  : 'Coin ID (ex: bitcoin)',
+                  ? 'Stooq symbol (example: nq.f, xauusd)'
+                  : 'CoinGecko coin id (example: bitcoin)',
             ),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _displayCtrl,
-            decoration: const InputDecoration(labelText: 'Symbole affiché (ex: NQ.F, BTC, XAUUSD)'),
+            decoration: const InputDecoration(labelText: 'Display symbol (example: NQ.F, BTC)'),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 10),
@@ -995,26 +988,27 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
               Expanded(
                 child: TextField(
                   controller: _unitCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Unité (ex: \$, €)',
-                  ),
+                  decoration: const InputDecoration(labelText: 'Unit (example: \$, EUR)'),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _source == AssetSource.coingecko
-                    ? TextField(
-                        controller: _vsCtrl,
-                        decoration: const InputDecoration(labelText: 'vs_currency (ex: usd)'),
-                      )
-                    : const SizedBox.shrink(),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 150),
+                  child: _source == AssetSource.coingecko
+                      ? TextField(
+                          key: const ValueKey('vs'),
+                          controller: _vsCtrl,
+                          decoration: const InputDecoration(labelText: 'vs_currency (example: usd)'),
+                        )
+                      : const SizedBox.shrink(key: ValueKey('vs-empty')),
+                ),
               ),
             ],
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ],
           const SizedBox(height: 14),
           Row(
@@ -1022,14 +1016,14 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('Annuler'),
+                  child: const Text('Cancel'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: FilledButton(
                   onPressed: _submit,
-                  child: const Text('Ajouter'),
+                  child: const Text('Add'),
                 ),
               ),
             ],
@@ -1040,104 +1034,112 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
   }
 }
 
-/// --- Data fetchers ---
+// -------------------- Data fetchers --------------------
 
-Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
-  // NOTE: on met une fallback sur stooq.pl si stooq.com renvoie un body vide.
-  final sym = Uri.encodeQueryComponent(symbol);
-  final urls = <Uri>[
-    Uri.parse('https://stooq.com/q/d/l/?s=$sym&i=d'),
-    Uri.parse('https://stooq.pl/q/d/l/?s=$sym&i=d'),
+Future<List<Candle>> _fetchStooqDailyCandlesWithRetry(String symbol) async {
+  // Try a few variants to fix empty-body cases on some networks / hosting.
+  final variants = <String>[
+    symbol,
+    symbol.toLowerCase(),
+    symbol.toUpperCase(),
   ];
 
-  http.Response? lastResp;
-
-  for (final url in urls) {
-    final resp = await http.get(url, headers: {
-      'User-Agent': 'Mozilla/5.0 (InvestApp)',
-      'Accept': 'text/csv,*/*;q=0.9',
-    });
-    lastResp = resp;
-
-    if (resp.statusCode != 200) {
-      continue;
+  Exception? lastError;
+  for (final s in variants) {
+    try {
+      final candles = await _fetchStooqDailyCandles(s);
+      if (candles.isNotEmpty) return candles;
+    } catch (e) {
+      lastError = Exception(e.toString());
     }
-
-    // si body vide: on tente l’autre domaine
-    if (resp.body.trim().isEmpty) {
-      continue;
-    }
-
-    final rawLines = const LineSplitter().convert(resp.body);
-
-    // Nettoyage robuste (BOM, retours Windows, lignes vides)
-    final lines = rawLines
-        .map((l) => l.replaceAll('\ufeff', '').trim())
-        .where((l) => l.isNotEmpty)
-        .toList();
-
-    if (lines.length < 2) {
-      continue;
-    }
-
-    final header = lines.first.toLowerCase();
-    if (!header.contains('date') || !header.contains('close')) {
-      continue;
-    }
-
-    final candles = <Candle>[];
-    for (int i = 1; i < lines.length; i++) {
-      final line = lines[i].trim();
-      if (line.isEmpty) continue;
-      final parts = line.split(',');
-      if (parts.length < 5) continue;
-
-      final date = DateTime.tryParse(parts[0]);
-      if (date == null) continue;
-
-      final open = double.tryParse(parts[1]) ?? double.nan;
-      final high = double.tryParse(parts[2]) ?? double.nan;
-      final low = double.tryParse(parts[3]) ?? double.nan;
-      final close = double.tryParse(parts[4]) ?? double.nan;
-
-      if ([open, high, low, close].any((x) => x.isNaN)) continue;
-
-      candles.add(Candle(
-        date: DateTime.utc(date.year, date.month, date.day),
-        open: open,
-        high: high,
-        low: low,
-        close: close,
-      ));
-    }
-
-    candles.sort((a, b) => a.date.compareTo(b.date));
-    if (candles.isNotEmpty) return candles;
   }
 
-  final status = lastResp?.statusCode;
-  final bodyPreview = (lastResp?.body ?? '').trim();
-  if (status == 200 && bodyPreview.isEmpty) {
-    throw Exception(
-      'Stooq CSV empty (HTTP 200) for symbol="$symbol". '
-      'Tried stooq.com and stooq.pl.',
-    );
+  throw lastError ?? Exception('Stooq failed for symbol: $symbol');
+}
+
+Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
+  final url = Uri.https('stooq.com', '/q/d/l/', <String, String>{
+    's': symbol,
+    'i': 'd',
+  });
+
+  final resp = await http.get(url, headers: <String, String>{
+    'User-Agent': 'Mozilla/5.0 (InvestApp)',
+    'Accept': 'text/csv,text/plain;q=0.9,*/*;q=0.8',
+  });
+
+  if (resp.statusCode != 200) {
+    throw Exception('Stooq HTTP ${resp.statusCode}');
   }
-  throw Exception(
-    'Stooq failed for symbol="$symbol". Last HTTP=$status.',
-  );
+
+  if (resp.body.trim().isEmpty) {
+    throw Exception('Stooq returned empty body for $url');
+  }
+
+  final rawLines = const LineSplitter().convert(resp.body);
+
+  final lines = rawLines
+      .map((l) => l.replaceAll('\ufeff', '').trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
+
+  if (lines.length < 2) {
+    final preview = lines.isEmpty ? 'EMPTY' : lines.take(3).join(' | ');
+    throw Exception('Stooq CSV too short for $url. First lines: $preview');
+  }
+
+  final header = lines.first.toLowerCase();
+  if (!header.contains('date') || !header.contains('close')) {
+    throw Exception('Stooq CSV invalid header for $url. Preview: ${lines.take(5).join(" | ")}');
+  }
+
+  final candles = <Candle>[];
+  for (int i = 1; i < lines.length; i++) {
+    final parts = lines[i].split(',');
+    if (parts.length < 5) continue;
+
+    final date = DateTime.tryParse(parts[0]);
+    if (date == null) continue;
+
+    final open = double.tryParse(parts[1]) ?? double.nan;
+    final high = double.tryParse(parts[2]) ?? double.nan;
+    final low = double.tryParse(parts[3]) ?? double.nan;
+    final close = double.tryParse(parts[4]) ?? double.nan;
+
+    if (open.isNaN || high.isNaN || low.isNaN || close.isNaN) continue;
+
+    candles.add(Candle(
+      date: DateTime.utc(date.year, date.month, date.day),
+      open: open,
+      high: high,
+      low: low,
+      close: close,
+    ));
+  }
+
+  candles.sort((a, b) => a.date.compareTo(b.date));
+  if (candles.isEmpty) throw Exception('Stooq returned empty candles for $url.');
+  return candles;
 }
 
 Future<SimplePrice> _fetchCoinGeckoSimplePrice(String id, String vs) async {
-  final url = Uri.parse(
-    'https://api.coingecko.com/api/v3/simple/price?ids=$id&vs_currencies=$vs&include_last_updated_at=true',
-  );
-  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (InvestApp)'});
+  final url = Uri.https('api.coingecko.com', '/api/v3/simple/price', <String, String>{
+    'ids': id,
+    'vs_currencies': vs,
+    'include_last_updated_at': 'true',
+  });
+
+  final resp = await http.get(url, headers: <String, String>{
+    'User-Agent': 'Mozilla/5.0 (InvestApp)',
+    'Accept': 'application/json',
+  });
 
   if (resp.statusCode == 429) {
-    throw Exception('CoinGecko HTTP 429 (rate limit). Réessaie dans 1-2 minutes.');
+    throw Exception('CoinGecko rate limited (HTTP 429). Wait a bit and refresh.');
   }
-  if (resp.statusCode != 200) throw Exception('CoinGecko HTTP ${resp.statusCode}');
+  if (resp.statusCode != 200) {
+    throw Exception('CoinGecko HTTP ${resp.statusCode}');
+  }
 
   final jsonMap = json.decode(resp.body) as Map<String, dynamic>;
   final coin = jsonMap[id] as Map<String, dynamic>?;
@@ -1158,13 +1160,18 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
   String vs, {
   int days = 370,
 }) async {
-  final url = Uri.parse(
-    'https://api.coingecko.com/api/v3/coins/$id/ohlc?vs_currency=$vs&days=$days',
-  );
-  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (InvestApp)'});
+  final url = Uri.https('api.coingecko.com', '/api/v3/coins/$id/ohlc', <String, String>{
+    'vs_currency': vs,
+    'days': days.toString(),
+  });
+
+  final resp = await http.get(url, headers: <String, String>{
+    'User-Agent': 'Mozilla/5.0 (InvestApp)',
+    'Accept': 'application/json',
+  });
 
   if (resp.statusCode == 429) {
-    throw Exception('CoinGecko OHLC HTTP 429 (rate limit). Réessaie dans 1-2 minutes.');
+    throw Exception('CoinGecko rate limited (HTTP 429). Wait a bit and refresh.');
   }
   if (resp.statusCode != 200) {
     throw Exception('CoinGecko OHLC HTTP ${resp.statusCode}');
@@ -1185,9 +1192,9 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
   }).toList();
 }
 
-/// --- Formatting helpers ---
+// -------------------- Formatting helpers --------------------
 
-String _fmt(double v) => NumberFormat('#,##0.##', 'fr_BE').format(v);
+String _fmt(double v) => NumberFormat('#,##0.##', 'en_US').format(v);
 
 String _fmtTs(DateTime utc) {
   final local = utc.toLocal();
@@ -1199,7 +1206,7 @@ String _fmtDate(DateTime utc) {
   return DateFormat('yyyy-MM-dd').format(local);
 }
 
-/// --- ISO week helpers (no external dependency) ---
+// -------------------- ISO week helpers --------------------
 
 class IsoWeek {
   final int year;
@@ -1208,7 +1215,6 @@ class IsoWeek {
 }
 
 IsoWeek isoWeek(DateTime dateUtc) {
-  // ISO-8601: week starts Monday, week 1 has Jan 4th.
   final d = DateTime.utc(dateUtc.year, dateUtc.month, dateUtc.day);
   final dayOfWeek = d.weekday; // Mon=1..Sun=7
   final thursday = d.add(Duration(days: 4 - dayOfWeek));
@@ -1216,8 +1222,7 @@ IsoWeek isoWeek(DateTime dateUtc) {
 
   final firstThursday = DateTime.utc(weekYear, 1, 4);
   final firstThursdayDay = firstThursday.weekday;
-  final firstWeekThursday =
-      firstThursday.add(Duration(days: 4 - firstThursdayDay));
+  final firstWeekThursday = firstThursday.add(Duration(days: 4 - firstThursdayDay));
 
   final diffDays = thursday.difference(firstWeekThursday).inDays;
   final week = 1 + (diffDays ~/ 7);
@@ -1225,7 +1230,7 @@ IsoWeek isoWeek(DateTime dateUtc) {
   return IsoWeek(weekYear, week);
 }
 
-IsoWeek _prevIsoWeek(IsoWeek w) {
+IsoWeek prevIsoWeek(IsoWeek w) {
   if (w.week > 1) return IsoWeek(w.year, w.week - 1);
   final dec28 = DateTime.utc(w.year - 1, 12, 28);
   return isoWeek(dec28);
