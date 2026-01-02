@@ -102,11 +102,9 @@ Future<void> _removeAssetBySymbol(String symbol) async {
 
   Future<List<AssetSnapshot>> _loadAll() async {
     final results = <AssetSnapshot>[];
-    for (final s in data)
-  AssetCard(
-    snapshot: s,
-    onDelete: () => _removeAssetBySymbol(s.symbol),
-  ),
+    for (final a in assets) {
+      results.add(await a.fetchAndCompute());
+    }
     return results;
   }
 
