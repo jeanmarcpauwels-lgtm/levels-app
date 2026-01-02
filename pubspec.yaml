@@ -22,9 +22,9 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/icon/Icon.png
+    - assets/icon/con.png
 
 flutter_icons:
   android: true
   ios: false
-  image_path: assets/icon/Icon.png
+  image_path: assets/con/Icon.png
