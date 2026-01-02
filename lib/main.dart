@@ -7,26 +7,20 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  runApp(const LevelsApp());
+  runApp(const InvestApp());
 }
 
 /// App goal (proxy approach, fully automatic):
-/// - NQ.F: Stooq daily OHLC CSV
+/// - NDX.US: Stooq daily OHLC CSV (Nasdaq 100 index)
 /// - XAUUSD: Stooq daily OHLC CSV
 /// - BTC: CoinGecko OHLC + current price
-///
-/// It computes and displays:
-/// - Daily (last complete daily candle): high/low + date
-/// - Weekly (previous ISO week): high/low + start/end dates
-/// - YTD: high/low + since Jan 1
-/// plus a "range position" bar and buy/neutral/sell badges.
-class LevelsApp extends StatelessWidget {
-  const LevelsApp({super.key});
+class InvestApp extends StatelessWidget {
+  const InvestApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Levels',
+      title: 'Invest',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.dark,
       theme: ThemeData(
@@ -52,11 +46,13 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  // ✅ NASDAQ: Stooq renvoie parfois vide sur "nq.f"
+  //    Stooq a un symbole plus stable: "ndx.us" (Nasdaq 100 index)
   final List<Asset> _defaultAssets = const [
     Asset.stooq(
-      title: 'Nasdaq 100 Future (proxy)',
-      symbol: 'nq.f',
-      displaySymbol: 'NQ.F',
+      title: 'Nasdaq 100 (Stooq)',
+      symbol: 'ndx.us',
+      displaySymbol: 'NDX.US',
       unit: '',
     ),
     Asset.coingecko(
@@ -76,6 +72,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   List<Asset> assets = [];
   late Future<List<AssetSnapshot>> _snapshots;
+
+  static const _prefsKey = 'assets_v1';
 
   @override
   void initState() {
@@ -99,8 +97,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _refresh() async {
     setState(() => _snapshots = _loadAll());
   }
-
-  static const _prefsKey = 'assets_v1';
 
   Future<void> _saveAssetsToPrefs(List<Asset> assets) async {
     final prefs = await SharedPreferences.getInstance();
@@ -130,7 +126,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return list.isEmpty ? null : list;
   }
 
-  Future<void> _removeAssetByDisplaySymbol(String displaySymbol) async {
+  /// ✅ Supprime par symbole affiché (fonctionne aussi pour les actifs ajoutés)
+  Future<void> _removeAssetBySymbol(String displaySymbol) async {
     setState(() {
       assets.removeWhere((a) => a.displaySymbol == displaySymbol);
       _snapshots = _loadAll();
@@ -138,11 +135,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _saveAssetsToPrefs(assets);
   }
 
+  Future<void> _confirmAndDelete(String displaySymbol) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Supprimer'),
+        content: Text('Supprimer $displaySymbol ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      await _removeAssetBySymbol(displaySymbol);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Levels'),
+        title: const Text('Invest'),
         actions: [
           IconButton(
             onPressed: _refresh,
@@ -195,7 +216,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
 
           final data = snap.data ?? [];
-
           return RefreshIndicator(
             onRefresh: _refresh,
             child: ListView(
@@ -204,7 +224,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 for (final s in data)
                   AssetCard(
                     snapshot: s,
-                    onDelete: () => _removeAssetByDisplaySymbol(s.symbol),
+                    onDelete: s.error == null || s.error != null
+                        ? () => _confirmAndDelete(s.symbol)
+                        : null,
                   ),
                 const SizedBox(height: 24),
                 const _Footnote(),
@@ -472,8 +494,7 @@ ComputedLevels computeLevelsFromDaily({
 
   RangeLevel weekly;
   if (weeklyCandles.isEmpty) {
-    final tail =
-        candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
+    final tail = candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
     weekly = RangeLevel(
       label: "Weekly (fallback 5d)",
       start: tail.first.date,
@@ -582,7 +603,7 @@ enum Zone { buy, neutral, sell }
 
 class AssetSnapshot {
   final String title;
-  final String symbol; // displaySymbol
+  final String symbol;
   final String unit;
 
   final double? currentPrice;
@@ -623,7 +644,7 @@ class AssetSnapshot {
 
 class AssetCard extends StatelessWidget {
   final AssetSnapshot snapshot;
-  final VoidCallback onDelete;
+  final VoidCallback? onDelete;
 
   const AssetCard({
     super.key,
@@ -650,32 +671,10 @@ class AssetCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    '${snapshot.symbol} • ${snapshot.title}',
-                    style: titleStyle,
-                  ),
+                  child: Text('${snapshot.symbol} • ${snapshot.title}', style: titleStyle),
                 ),
                 IconButton(
-                  onPressed: () async {
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('Supprimer'),
-                        content: Text("Supprimer ${snapshot.symbol} ?"),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('Annuler'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: const Text('Supprimer'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (ok == true) onDelete();
-                  },
+                  onPressed: onDelete,
                   icon: const Icon(Icons.delete_outline),
                   tooltip: 'Supprimer',
                 ),
@@ -697,8 +696,7 @@ class AssetCard extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}',
-                      style: priceStyle),
+                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}', style: priceStyle),
                   const SizedBox(width: 10),
                   Opacity(
                     opacity: 0.7,
@@ -715,8 +713,7 @@ class AssetCard extends StatelessWidget {
               const SizedBox(height: 10),
               Opacity(
                 opacity: 0.75,
-                child: Text(snapshot.dataNote ?? '',
-                    style: theme.textTheme.bodySmall),
+                child: Text(snapshot.dataNote ?? '', style: theme.textTheme.bodySmall),
               ),
             ],
           ],
@@ -771,8 +768,7 @@ class _RangeRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final small = theme.textTheme.bodySmall;
-    final medium =
-        theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700);
+    final medium = theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700);
 
     final pos = level.position(current);
     final posClamped = pos == null ? 0.5 : pos.clamp(0.0, 1.0);
@@ -936,10 +932,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
         children: [
           Text(
             'Ajouter un actif',
-            style: Theme.of(context)
-                .textTheme
-                .titleLarge
-                ?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
           SegmentedButton<AssetSource>(
@@ -953,7 +946,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
           const SizedBox(height: 12),
           TextField(
             controller: _titleCtrl,
-            decoration: const InputDecoration(labelText: 'Nom (ex: Nasdaq 100 Future)'),
+            decoration: const InputDecoration(labelText: 'Nom (ex: Nasdaq 100)'),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 10),
@@ -961,7 +954,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
             controller: _symbolCtrl,
             decoration: InputDecoration(
               labelText: _source == AssetSource.stooq
-                  ? 'Symbole Stooq (ex: nq.f, xauusd)'
+                  ? 'Symbole Stooq (ex: ndx.us, xauusd)'
                   : 'Coin ID (ex: bitcoin)',
             ),
             textInputAction: TextInputAction.next,
@@ -969,9 +962,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
           const SizedBox(height: 10),
           TextField(
             controller: _displayCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Symbole affiché (ex: NQ.F, BTC, XAUUSD)',
-            ),
+            decoration: const InputDecoration(labelText: 'Symbole affiché (ex: NDX.US, BTC)'),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 10),
@@ -1002,10 +993,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
+            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ],
           const SizedBox(height: 14),
           Row(
@@ -1034,14 +1022,15 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
 /// --- Data fetchers ---
 
 Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
+  // Stooq CSV: https://stooq.com/q/d/l/?s=<symbol>&i=d
   final url = Uri.parse('https://stooq.com/q/d/l/?s=$symbol&i=d');
 
   final resp = await http.get(url, headers: {
-    'User-Agent': 'Mozilla/5.0 (LevelsApp)',
+    'User-Agent': 'Mozilla/5.0 (InvestApp)',
   });
 
   if (resp.statusCode != 200) {
-    throw Exception('Stooq HTTP ${resp.statusCode} for $url');
+    throw Exception('Stooq HTTP ${resp.statusCode} ($url)');
   }
 
   final rawLines = const LineSplitter().convert(resp.body);
@@ -1064,9 +1053,7 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
 
   final candles = <Candle>[];
   for (int i = 1; i < lines.length; i++) {
-    final line = lines[i].trim();
-    if (line.isEmpty) continue;
-    final parts = line.split(',');
+    final parts = lines[i].split(',');
     if (parts.length < 5) continue;
 
     final date = DateTime.tryParse(parts[0]);
@@ -1089,31 +1076,17 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
   }
 
   candles.sort((a, b) => a.date.compareTo(b.date));
-  if (candles.isEmpty) throw Exception('Stooq returned empty candles for $url.');
+  if (candles.isEmpty) {
+    throw Exception('Stooq returned empty candles for $url.');
+  }
   return candles;
 }
 
-// --- CoinGecko cache (to reduce 429) ---
-
-final Map<String, (DateTime ts, SimplePrice data)> _cgPriceCache = {};
-final Map<String, (DateTime ts, List<OhlcPoint> data)> _cgOhlcCache = {};
-
 Future<SimplePrice> _fetchCoinGeckoSimplePrice(String id, String vs) async {
-  final cacheKey = '$id|$vs';
-  final now = DateTime.now().toUtc();
-  final cached = _cgPriceCache[cacheKey];
-  if (cached != null && now.difference(cached.$1).inSeconds < 45) {
-    return cached.$2;
-  }
-
   final url = Uri.parse(
     'https://api.coingecko.com/api/v3/simple/price?ids=$id&vs_currencies=$vs&include_last_updated_at=true',
   );
-
-  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (LevelsApp)'});
-  if (resp.statusCode == 429) {
-    throw Exception('CoinGecko HTTP 429 (rate-limit). Réessaie dans 1 minute.');
-  }
+  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (InvestApp)'});
   if (resp.statusCode != 200) throw Exception('CoinGecko HTTP ${resp.statusCode}');
 
   final jsonMap = json.decode(resp.body) as Map<String, dynamic>;
@@ -1127,9 +1100,7 @@ Future<SimplePrice> _fetchCoinGeckoSimplePrice(String id, String vs) async {
       ? DateTime.now().toUtc()
       : DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true);
 
-  final result = SimplePrice(price, dt);
-  _cgPriceCache[cacheKey] = (now, result);
-  return result;
+  return SimplePrice(price, dt);
 }
 
 Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
@@ -1137,21 +1108,10 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
   String vs, {
   int days = 370,
 }) async {
-  final cacheKey = '$id|$vs|$days';
-  final now = DateTime.now().toUtc();
-  final cached = _cgOhlcCache[cacheKey];
-  if (cached != null && now.difference(cached.$1).inMinutes < 10) {
-    return cached.$2;
-  }
-
   final url = Uri.parse(
     'https://api.coingecko.com/api/v3/coins/$id/ohlc?vs_currency=$vs&days=$days',
   );
-
-  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (LevelsApp)'});
-  if (resp.statusCode == 429) {
-    throw Exception('CoinGecko OHLC HTTP 429 (rate-limit). Réessaie dans 1 minute.');
-  }
+  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (InvestApp)'});
   if (resp.statusCode != 200) {
     throw Exception('CoinGecko OHLC HTTP ${resp.statusCode}');
   }
@@ -1159,7 +1119,7 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
   final arr = json.decode(resp.body);
   if (arr is! List) throw Exception('CoinGecko OHLC unexpected format.');
 
-  final result = arr.map<OhlcPoint>((e) {
+  return arr.map<OhlcPoint>((e) {
     final l = (e as List).cast<num>();
     return OhlcPoint(
       l[0].toInt(),
@@ -1169,9 +1129,6 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
       l[4].toDouble(),
     );
   }).toList();
-
-  _cgOhlcCache[cacheKey] = (now, result);
-  return result;
 }
 
 /// --- Formatting helpers ---
