@@ -77,16 +77,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Asset> assets = [];
   late Future<List<AssetSnapshot>> _snapshots;
 
-  /// ✅ Suppression la plus simple et la plus fiable :
-  /// on supprime via une clé stable (Asset.key), pas via un index.
-  Future<void> _removeAssetByKey(String key) async {
-    setState(() {
-      assets.removeWhere((a) => a.key == key);
-      _snapshots = _loadAll();
-    });
-    await _saveAssetsToPrefs(assets);
-  }
-
   @override
   void initState() {
     super.initState();
@@ -138,6 +128,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
     return list.isEmpty ? null : list;
+  }
+
+  Future<void> _removeAssetByDisplaySymbol(String displaySymbol) async {
+    setState(() {
+      assets.removeWhere((a) => a.displaySymbol == displaySymbol);
+      _snapshots = _loadAll();
+    });
+    await _saveAssetsToPrefs(assets);
   }
 
   @override
@@ -197,6 +195,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
 
           final data = snap.data ?? [];
+
           return RefreshIndicator(
             onRefresh: _refresh,
             child: ListView(
@@ -205,28 +204,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 for (final s in data)
                   AssetCard(
                     snapshot: s,
-                    onDelete: () async {
-                      final ok = await showDialog<bool>(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          title: const Text('Supprimer'),
-                          content: Text('Supprimer "${s.symbol}" ?'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, false),
-                              child: const Text('Annuler'),
-                            ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(context, true),
-                              child: const Text('Supprimer'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (ok == true) {
-                        await _removeAssetByKey(s.key);
-                      }
-                    },
+                    onDelete: () => _removeAssetByDisplaySymbol(s.symbol),
                   ),
                 const SizedBox(height: 24),
                 const _Footnote(),
@@ -279,16 +257,6 @@ class Asset {
     this.coinId,
     this.vsCurrency,
   });
-
-  /// ✅ Clé stable utilisée pour suppression + persistance
-  String get key {
-    switch (source) {
-      case AssetSource.stooq:
-        return 'stooq:${(stooqSymbol ?? '').toLowerCase()}';
-      case AssetSource.coingecko:
-        return 'coingecko:${(coinId ?? '').toLowerCase()}:${(vsCurrency ?? 'usd').toLowerCase()}';
-    }
-  }
 
   const Asset.stooq({
     required String title,
@@ -377,7 +345,6 @@ class Asset {
             currentTimestampUtc: now,
           );
           return AssetSnapshot(
-            key: key,
             title: title,
             symbol: displaySymbol,
             unit: unit,
@@ -389,7 +356,8 @@ class Asset {
           );
 
         case AssetSource.coingecko:
-          final priceData = await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
+          final priceData =
+              await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
           final current = priceData.price;
           final now = priceData.timestampUtc;
 
@@ -420,7 +388,6 @@ class Asset {
           );
 
           return AssetSnapshot(
-            key: key,
             title: title,
             symbol: displaySymbol,
             unit: unit,
@@ -433,7 +400,6 @@ class Asset {
       }
     } catch (e) {
       return AssetSnapshot.error(
-        key: key,
         title: title,
         symbol: displaySymbol,
         unit: unit,
@@ -506,7 +472,8 @@ ComputedLevels computeLevelsFromDaily({
 
   RangeLevel weekly;
   if (weeklyCandles.isEmpty) {
-    final tail = candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
+    final tail =
+        candles.length >= 5 ? candles.sublist(candles.length - 5) : candles;
     weekly = RangeLevel(
       label: "Weekly (fallback 5d)",
       start: tail.first.date,
@@ -614,9 +581,8 @@ class RangeLevel {
 enum Zone { buy, neutral, sell }
 
 class AssetSnapshot {
-  final String key; // ✅ clé stable pour suppression
   final String title;
-  final String symbol;
+  final String symbol; // displaySymbol
   final String unit;
 
   final double? currentPrice;
@@ -627,7 +593,6 @@ class AssetSnapshot {
   final String? error;
 
   AssetSnapshot({
-    required this.key,
     required this.title,
     required this.symbol,
     required this.unit,
@@ -639,14 +604,12 @@ class AssetSnapshot {
   });
 
   factory AssetSnapshot.error({
-    required String key,
     required String title,
     required String symbol,
     required String unit,
     required String error,
   }) =>
       AssetSnapshot(
-        key: key,
         title: title,
         symbol: symbol,
         unit: unit,
@@ -671,8 +634,10 @@ class AssetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final titleStyle = theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
-    final priceStyle = theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+    final titleStyle =
+        theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
+    final priceStyle =
+        theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
 
     return Card(
       elevation: 0,
@@ -685,10 +650,32 @@ class AssetCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text('${snapshot.symbol} • ${snapshot.title}', style: titleStyle),
+                  child: Text(
+                    '${snapshot.symbol} • ${snapshot.title}',
+                    style: titleStyle,
+                  ),
                 ),
                 IconButton(
-                  onPressed: onDelete,
+                  onPressed: () async {
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: const Text('Supprimer'),
+                        content: Text("Supprimer ${snapshot.symbol} ?"),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('Annuler'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('Supprimer'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (ok == true) onDelete();
+                  },
                   icon: const Icon(Icons.delete_outline),
                   tooltip: 'Supprimer',
                 ),
@@ -703,13 +690,15 @@ class AssetCard extends StatelessWidget {
             if (snapshot.error != null)
               Text(
                 'Erreur source: ${snapshot.error}',
-                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.error),
               )
             else
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}', style: priceStyle),
+                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}',
+                      style: priceStyle),
                   const SizedBox(width: 10),
                   Opacity(
                     opacity: 0.7,
@@ -726,7 +715,8 @@ class AssetCard extends StatelessWidget {
               const SizedBox(height: 10),
               Opacity(
                 opacity: 0.75,
-                child: Text(snapshot.dataNote ?? '', style: theme.textTheme.bodySmall),
+                child: Text(snapshot.dataNote ?? '',
+                    style: theme.textTheme.bodySmall),
               ),
             ],
           ],
@@ -781,7 +771,8 @@ class _RangeRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final small = theme.textTheme.bodySmall;
-    final medium = theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700);
+    final medium =
+        theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700);
 
     final pos = level.position(current);
     final posClamped = pos == null ? 0.5 : pos.clamp(0.0, 1.0);
@@ -945,7 +936,10 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
         children: [
           Text(
             'Ajouter un actif',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(context)
+                .textTheme
+                .titleLarge
+                ?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
           SegmentedButton<AssetSource>(
@@ -975,7 +969,9 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
           const SizedBox(height: 10),
           TextField(
             controller: _displayCtrl,
-            decoration: const InputDecoration(labelText: 'Symbole affiché (ex: NQ.F, BTC, XAUUSD)'),
+            decoration: const InputDecoration(
+              labelText: 'Symbole affiché (ex: NQ.F, BTC, XAUUSD)',
+            ),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 10),
@@ -1006,7 +1002,10 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
-            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ],
           const SizedBox(height: 14),
           Row(
@@ -1035,13 +1034,14 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
 /// --- Data fetchers ---
 
 Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
-  // Stooq CSV pattern: https://stooq.com/q/d/l/?s=<symbol>&i=d
   final url = Uri.parse('https://stooq.com/q/d/l/?s=$symbol&i=d');
+
   final resp = await http.get(url, headers: {
     'User-Agent': 'Mozilla/5.0 (LevelsApp)',
   });
+
   if (resp.statusCode != 200) {
-    throw Exception('Stooq HTTP ${resp.statusCode}');
+    throw Exception('Stooq HTTP ${resp.statusCode} for $url');
   }
 
   final rawLines = const LineSplitter().convert(resp.body);
@@ -1054,14 +1054,12 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
 
   if (lines.length < 2) {
     final preview = lines.isEmpty ? 'EMPTY' : lines.take(3).join(' | ');
-    throw Exception('Stooq CSV too short. First non-empty lines: $preview');
+    throw Exception('Stooq CSV too short for $url. First non-empty lines: $preview');
   }
 
   final header = lines.first.toLowerCase();
   if (!header.contains('date') || !header.contains('close')) {
-    throw Exception(
-      'Stooq CSV invalid header. Preview: ${lines.take(5).join(" | ")}',
-    );
+    throw Exception('Stooq CSV invalid header for $url. Preview: ${lines.take(5).join(" | ")}');
   }
 
   final candles = <Candle>[];
@@ -1091,15 +1089,31 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
   }
 
   candles.sort((a, b) => a.date.compareTo(b.date));
-  if (candles.isEmpty) throw Exception('Stooq returned empty candles.');
+  if (candles.isEmpty) throw Exception('Stooq returned empty candles for $url.');
   return candles;
 }
 
+// --- CoinGecko cache (to reduce 429) ---
+
+final Map<String, (DateTime ts, SimplePrice data)> _cgPriceCache = {};
+final Map<String, (DateTime ts, List<OhlcPoint> data)> _cgOhlcCache = {};
+
 Future<SimplePrice> _fetchCoinGeckoSimplePrice(String id, String vs) async {
+  final cacheKey = '$id|$vs';
+  final now = DateTime.now().toUtc();
+  final cached = _cgPriceCache[cacheKey];
+  if (cached != null && now.difference(cached.$1).inSeconds < 45) {
+    return cached.$2;
+  }
+
   final url = Uri.parse(
     'https://api.coingecko.com/api/v3/simple/price?ids=$id&vs_currencies=$vs&include_last_updated_at=true',
   );
+
   final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (LevelsApp)'});
+  if (resp.statusCode == 429) {
+    throw Exception('CoinGecko HTTP 429 (rate-limit). Réessaie dans 1 minute.');
+  }
   if (resp.statusCode != 200) throw Exception('CoinGecko HTTP ${resp.statusCode}');
 
   final jsonMap = json.decode(resp.body) as Map<String, dynamic>;
@@ -1113,7 +1127,9 @@ Future<SimplePrice> _fetchCoinGeckoSimplePrice(String id, String vs) async {
       ? DateTime.now().toUtc()
       : DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true);
 
-  return SimplePrice(price, dt);
+  final result = SimplePrice(price, dt);
+  _cgPriceCache[cacheKey] = (now, result);
+  return result;
 }
 
 Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
@@ -1121,10 +1137,21 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
   String vs, {
   int days = 370,
 }) async {
+  final cacheKey = '$id|$vs|$days';
+  final now = DateTime.now().toUtc();
+  final cached = _cgOhlcCache[cacheKey];
+  if (cached != null && now.difference(cached.$1).inMinutes < 10) {
+    return cached.$2;
+  }
+
   final url = Uri.parse(
     'https://api.coingecko.com/api/v3/coins/$id/ohlc?vs_currency=$vs&days=$days',
   );
+
   final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (LevelsApp)'});
+  if (resp.statusCode == 429) {
+    throw Exception('CoinGecko OHLC HTTP 429 (rate-limit). Réessaie dans 1 minute.');
+  }
   if (resp.statusCode != 200) {
     throw Exception('CoinGecko OHLC HTTP ${resp.statusCode}');
   }
@@ -1132,7 +1159,7 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
   final arr = json.decode(resp.body);
   if (arr is! List) throw Exception('CoinGecko OHLC unexpected format.');
 
-  return arr.map<OhlcPoint>((e) {
+  final result = arr.map<OhlcPoint>((e) {
     final l = (e as List).cast<num>();
     return OhlcPoint(
       l[0].toInt(),
@@ -1142,6 +1169,9 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
       l[4].toDouble(),
     );
   }).toList();
+
+  _cgOhlcCache[cacheKey] = (now, result);
+  return result;
 }
 
 /// --- Formatting helpers ---
