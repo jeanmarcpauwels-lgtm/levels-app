@@ -6,11 +6,48 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// ===== ISO WEEK HELPERS (À METTRE EN HAUT DU FICHIER) =====
+
 class IsoWeek {
   final int year;
   final int week;
   const IsoWeek(this.year, this.week);
 }
+
+IsoWeek isoWeek(DateTime dateUtc) {
+  final d = DateTime.utc(
+    dateUtc.year,
+    dateUtc.month,
+    dateUtc.day,
+  );
+
+  // ISO-8601 : semaine basée sur le jeudi
+  final dayOfWeek = d.weekday; // 1 = lundi, 7 = dimanche
+  final thursday = d.add(Duration(days: 4 - dayOfWeek));
+  final weekYear = thursday.year;
+
+  // Le jeudi de la semaine 1 est celui de la semaine contenant le 4 janvier
+  final firstThursday = DateTime.utc(weekYear, 1, 4);
+  final firstThursdayWeekday = firstThursday.weekday;
+  final firstWeekThursday =
+      firstThursday.add(Duration(days: 4 - firstThursdayWeekday));
+
+  final diffDays = thursday.difference(firstWeekThursday).inDays;
+  final week = 1 + (diffDays ~/ 7);
+
+  return IsoWeek(weekYear, week);
+}
+
+IsoWeek prevIsoWeek(IsoWeek w) {
+  if (w.week > 1) {
+    return IsoWeek(w.year, w.week - 1);
+  }
+  // Semaine précédente = semaine ISO du 28 décembre de l’année précédente
+  final dec28 = DateTime.utc(w.year - 1, 12, 28);
+  return isoWeek(dec28);
+}
+
+// ===== FIN ISO WEEK HELPERS =====
 void main() {
   runApp(const LevelsApp());
 }
@@ -1155,29 +1192,4 @@ String _fmtDate(DateTime utc) {
   return DateFormat('yyyy-MM-dd').format(local);
 }
 
-/// --- ISO week helpers (no external dependency) ---
 
-
-
-IsoWeek isoWeek(DateTime dateUtc) {
-  // ISO-8601: week starts Monday, week 1 has Jan 4th.
-  final d = DateTime.utc(dateUtc.year, dateUtc.month, dateUtc.day);
-  final dayOfWeek = d.weekday; // Mon=1..Sun=7
-  final thursday = d.add(Duration(days: 4 - dayOfWeek));
-  final weekYear = thursday.year;
-
-  final firstThursday = DateTime.utc(weekYear, 1, 4);
-  final firstThursdayDay = firstThursday.weekday;
-  final firstWeekThursday = firstThursday.add(Duration(days: 4 - firstThursdayDay));
-
-  final diffDays = thursday.difference(firstWeekThursday).inDays;
-  final week = 1 + (diffDays ~/ 7);
-
-  return IsoWeek(weekYear, week);
-}
-
-IsoWeek _prevIsoWeek(IsoWeek w) {
-  if (w.week > 1) return IsoWeek(w.year, w.week - 1);
-  final dec28 = DateTime.utc(w.year - 1, 12, 28);
-  return isoWeek(dec28);
-}
