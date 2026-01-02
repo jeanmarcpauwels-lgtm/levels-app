@@ -10,10 +10,6 @@ void main() {
   runApp(const InvestApp());
 }
 
-/// App goal (proxy approach, fully automatic):
-/// - NDX.US: Stooq daily OHLC CSV (Nasdaq 100 index)
-/// - XAUUSD: Stooq daily OHLC CSV
-/// - BTC: CoinGecko OHLC + current price
 class InvestApp extends StatelessWidget {
   const InvestApp({super.key});
 
@@ -46,8 +42,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ✅ NASDAQ: Stooq renvoie parfois vide sur "nq.f"
-  //    Stooq a un symbole plus stable: "ndx.us" (Nasdaq 100 index)
+  // NASDAQ: on utilise ndx.us (plus fiable que nq.f sur Stooq)
   final List<Asset> _defaultAssets = const [
     Asset.stooq(
       title: 'Nasdaq 100 (Stooq)',
@@ -126,7 +121,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return list.isEmpty ? null : list;
   }
 
-  /// ✅ Supprime par symbole affiché (fonctionne aussi pour les actifs ajoutés)
   Future<void> _removeAssetBySymbol(String displaySymbol) async {
     setState(() {
       assets.removeWhere((a) => a.displaySymbol == displaySymbol);
@@ -153,7 +147,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
-
     if (ok == true) {
       await _removeAssetBySymbol(displaySymbol);
     }
@@ -189,7 +182,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               );
             },
           );
-
           if (added != null) {
             setState(() {
               assets = [...assets, added];
@@ -214,7 +206,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             );
           }
-
           final data = snap.data ?? [];
           return RefreshIndicator(
             onRefresh: _refresh,
@@ -224,9 +215,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 for (final s in data)
                   AssetCard(
                     snapshot: s,
-                    onDelete: s.error == null || s.error != null
-                        ? () => _confirmAndDelete(s.symbol)
-                        : null,
+                    onDelete: () => _confirmAndDelete(s.symbol),
                   ),
                 const SizedBox(height: 24),
                 const _Footnote(),
@@ -259,10 +248,8 @@ class _Footnote extends StatelessWidget {
 class Asset {
   final AssetSource source;
 
-  // Stooq
   final String? stooqSymbol;
 
-  // CoinGecko
   final String? coinId;
   final String? vsCurrency;
 
@@ -359,7 +346,7 @@ class Asset {
       switch (source) {
         case AssetSource.stooq:
           final candles = await _fetchStooqDailyCandles(stooqSymbol!);
-          final current = candles.last.close; // most recent
+          final current = candles.last.close;
           final now = DateTime.now().toUtc();
           final levels = computeLevelsFromDaily(
             candles: candles,
@@ -378,8 +365,7 @@ class Asset {
           );
 
         case AssetSource.coingecko:
-          final priceData =
-              await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
+          final priceData = await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
           final current = priceData.price;
           final now = priceData.timestampUtc;
 
@@ -391,10 +377,7 @@ class Asset {
 
           final dailyCandles = ohlc
               .map((e) => Candle(
-                    date: DateTime.fromMillisecondsSinceEpoch(
-                      e.timestampMs,
-                      isUtc: true,
-                    ),
+                    date: DateTime.fromMillisecondsSinceEpoch(e.timestampMs, isUtc: true),
                     open: e.open,
                     high: e.high,
                     low: e.low,
@@ -434,7 +417,7 @@ class Asset {
 enum AssetSource { stooq, coingecko }
 
 class Candle {
-  final DateTime date; // UTC midnight
+  final DateTime date;
   final double open;
   final double high;
   final double low;
@@ -461,10 +444,6 @@ class SimplePrice {
   SimplePrice(this.price, this.timestampUtc);
 }
 
-/// Computes:
-/// - Daily (last complete day candle) = last candle in list
-/// - Weekly previous ISO week from the last candle's date
-/// - YTD from Jan 1 of last candle's year
 ComputedLevels computeLevelsFromDaily({
   required List<Candle> candles,
   required double currentPrice,
@@ -644,7 +623,7 @@ class AssetSnapshot {
 
 class AssetCard extends StatelessWidget {
   final AssetSnapshot snapshot;
-  final VoidCallback? onDelete;
+  final VoidCallback onDelete;
 
   const AssetCard({
     super.key,
@@ -655,10 +634,8 @@ class AssetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final titleStyle =
-        theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
-    final priceStyle =
-        theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+    final titleStyle = theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
+    final priceStyle = theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
 
     return Card(
       elevation: 0,
@@ -689,8 +666,7 @@ class AssetCard extends StatelessWidget {
             if (snapshot.error != null)
               Text(
                 'Erreur source: ${snapshot.error}',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.error),
+                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
               )
             else
               Row(
@@ -731,23 +707,11 @@ class _RangeBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        _RangeRow(
-          level: levels.daily,
-          current: levels.currentPrice,
-          zone: levels.verdictFor(levels.daily),
-        ),
+        _RangeRow(level: levels.daily, current: levels.currentPrice, zone: levels.verdictFor(levels.daily)),
         const SizedBox(height: 10),
-        _RangeRow(
-          level: levels.weekly,
-          current: levels.currentPrice,
-          zone: levels.verdictFor(levels.weekly),
-        ),
+        _RangeRow(level: levels.weekly, current: levels.currentPrice, zone: levels.verdictFor(levels.weekly)),
         const SizedBox(height: 10),
-        _RangeRow(
-          level: levels.ytd,
-          current: levels.currentPrice,
-          zone: levels.verdictFor(levels.ytd),
-        ),
+        _RangeRow(level: levels.ytd, current: levels.currentPrice, zone: levels.verdictFor(levels.ytd)),
       ],
     );
   }
@@ -801,11 +765,7 @@ class _RangeRow extends StatelessWidget {
           children: [
             Expanded(child: Text('Low  ${_fmt(level.low)}', style: medium)),
             Expanded(
-              child: Text(
-                'High ${_fmt(level.high)}',
-                style: medium,
-                textAlign: TextAlign.right,
-              ),
+              child: Text('High ${_fmt(level.high)}', style: medium, textAlign: TextAlign.right),
             ),
           ],
         ),
@@ -971,9 +931,7 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
               Expanded(
                 child: TextField(
                   controller: _unitCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Unité (ex: \$, €)',
-                  ),
+                  decoration: const InputDecoration(labelText: 'Unité (ex: \$, €)'),
                 ),
               ),
               const SizedBox(width: 12),
@@ -1022,33 +980,23 @@ class _AddAssetSheetState extends State<AddAssetSheet> {
 /// --- Data fetchers ---
 
 Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
-  // Stooq CSV: https://stooq.com/q/d/l/?s=<symbol>&i=d
   final url = Uri.parse('https://stooq.com/q/d/l/?s=$symbol&i=d');
-
-  final resp = await http.get(url, headers: {
-    'User-Agent': 'Mozilla/5.0 (InvestApp)',
-  });
-
-  if (resp.statusCode != 200) {
-    throw Exception('Stooq HTTP ${resp.statusCode} ($url)');
-  }
+  final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (InvestApp)'});
+  if (resp.statusCode != 200) throw Exception('Stooq HTTP ${resp.statusCode}');
 
   final rawLines = const LineSplitter().convert(resp.body);
-
-  // Nettoyage robuste (BOM, retours Windows, lignes vides)
   final lines = rawLines
       .map((l) => l.replaceAll('\ufeff', '').trim())
       .where((l) => l.isNotEmpty)
       .toList();
 
   if (lines.length < 2) {
-    final preview = lines.isEmpty ? 'EMPTY' : lines.take(3).join(' | ');
-    throw Exception('Stooq CSV too short for $url. First non-empty lines: $preview');
+    throw Exception('Stooq CSV too short (empty/blocked) for symbol: $symbol');
   }
 
   final header = lines.first.toLowerCase();
   if (!header.contains('date') || !header.contains('close')) {
-    throw Exception('Stooq CSV invalid header for $url. Preview: ${lines.take(5).join(" | ")}');
+    throw Exception('Stooq CSV invalid header for symbol: $symbol');
   }
 
   final candles = <Candle>[];
@@ -1076,9 +1024,7 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
   }
 
   candles.sort((a, b) => a.date.compareTo(b.date));
-  if (candles.isEmpty) {
-    throw Exception('Stooq returned empty candles for $url.');
-  }
+  if (candles.isEmpty) throw Exception('Stooq returned empty candles for $symbol');
   return candles;
 }
 
@@ -1112,9 +1058,7 @@ Future<List<OhlcPoint>> _fetchCoinGeckoOhlcDaily(
     'https://api.coingecko.com/api/v3/coins/$id/ohlc?vs_currency=$vs&days=$days',
   );
   final resp = await http.get(url, headers: {'User-Agent': 'Mozilla/5.0 (InvestApp)'});
-  if (resp.statusCode != 200) {
-    throw Exception('CoinGecko OHLC HTTP ${resp.statusCode}');
-  }
+  if (resp.statusCode != 200) throw Exception('CoinGecko OHLC HTTP ${resp.statusCode}');
 
   final arr = json.decode(resp.body);
   if (arr is! List) throw Exception('CoinGecko OHLC unexpected format.');
@@ -1145,7 +1089,7 @@ String _fmtDate(DateTime utc) {
   return DateFormat('yyyy-MM-dd').format(local);
 }
 
-/// --- ISO week helpers (no external dependency) ---
+/// --- ISO week helpers ---
 
 class IsoWeek {
   final int year;
@@ -1154,9 +1098,8 @@ class IsoWeek {
 }
 
 IsoWeek isoWeek(DateTime dateUtc) {
-  // ISO-8601: week starts Monday, week 1 has Jan 4th.
   final d = DateTime.utc(dateUtc.year, dateUtc.month, dateUtc.day);
-  final dayOfWeek = d.weekday; // Mon=1..Sun=7
+  final dayOfWeek = d.weekday;
   final thursday = d.add(Duration(days: 4 - dayOfWeek));
   final weekYear = thursday.year;
 
@@ -1166,7 +1109,6 @@ IsoWeek isoWeek(DateTime dateUtc) {
 
   final diffDays = thursday.difference(firstWeekThursday).inDays;
   final week = 1 + (diffDays ~/ 7);
-
   return IsoWeek(weekYear, week);
 }
 
