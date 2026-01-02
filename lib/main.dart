@@ -82,9 +82,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   late Future<List<AssetSnapshot>> _snapshots;
   
-Future<void> _removeAssetAt(int index) async {
+Future<void> _removeAssetBySymbol(String symbol) async {
   setState(() {
-    assets.removeAt(index);
+    assets.removeWhere((a) => a.displaySymbol == symbol);
     _snapshots = _loadAll();
   });
   await _saveAssetsToPrefs(assets);
