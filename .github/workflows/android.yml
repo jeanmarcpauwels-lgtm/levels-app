@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build APK (release)
 
 on:
   workflow_dispatch:
@@ -10,51 +10,82 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: subosito/flutter-action@v2
+      # Java 17 = plus stable pour Gradle/Kotlin
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Cache Gradle + Flutter (stabilité + vitesse)
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache Flutter Pub
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      # ✅ IMPORTANT : forcer l'URL canonique de Maven Central
+      - name: Force Maven Central URL (init.gradle)
+        run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/init.gradle <<'EOF'
+          allprojects {
+            buildscript {
+              repositories {
+                google()
+                maven { url "https://repo1.maven.org/maven2" }
+              }
+            }
+            repositories {
+              google()
+              maven { url "https://repo1.maven.org/maven2" }
+            }
+          }
+          EOF
+
+      # Petit diagnostic (tu verras si l'URL répond)
+      - name: Test Maven Central access
+        run: |
+          curl -I --retry 3 --retry-delay 2 https://repo1.maven.org/maven2/ | head -n 20
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      # Create a full Flutter project scaffold (android/gradle/ etc.)
-      - name: Create Flutter project scaffold
-        run: flutter create -t app build_app
-
-      - name: Ensure Android INTERNET permission
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path("build_app/android/app/src/main/AndroidManifest.xml")
-          xml = p.read_text(encoding="utf-8")
-
-          if "android.permission.INTERNET" not in xml:
-              m = re.search(r"<manifest[^>]*>", xml)
-              if not m:
-                  raise SystemExit("Manifest tag not found")
-              insert = '\n    <uses-permission android:name="android.permission.INTERNET"/>\n'
-              xml = xml[:m.end()] + insert + xml[m.end():]
-              p.write_text(xml, encoding="utf-8")
-          PY
-
-      # Copy your app code into the scaffold
-      - name: Copy sources
-        run: |
-          rm -rf build_app/lib
-          cp -r lib build_app/lib
-          cp pubspec.yaml build_app/pubspec.yaml
-
-      - name: Pub get
-        working-directory: build_app
+      - name: Flutter pub get
         run: flutter pub get
 
-      - name: Build APK (release)
-        working-directory: build_app
-        run: flutter build apk --release
+      # Retry build (si réseau instable)
+      - name: Build APK (release) with retry
+        run: |
+          set -e
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+            flutter build apk --release && break
+            echo "Build failed. Sleeping 10s..."
+            sleep 10
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: build_app/build/app/outputs/flutter-apk/app-release.apk
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
