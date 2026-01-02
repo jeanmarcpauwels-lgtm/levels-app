@@ -6,6 +6,11 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class IsoWeek {
+  final int year;
+  final int week;
+  const IsoWeek(this.year, this.week);
+}
 void main() {
   runApp(const LevelsApp());
 }
@@ -1152,11 +1157,7 @@ String _fmtDate(DateTime utc) {
 
 /// --- ISO week helpers (no external dependency) ---
 
-class IsoWeek {
-  final int year;
-  final int week;
-  const IsoWeek(this.year, this.week);
-}
+
 
 IsoWeek isoWeek(DateTime dateUtc) {
   // ISO-8601: week starts Monday, week 1 has Jan 4th.
