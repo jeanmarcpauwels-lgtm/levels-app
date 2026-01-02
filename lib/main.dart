@@ -26,25 +26,21 @@ class LevelsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-  title: 'Levels',
-  debugShowCheckedModeBanner: false,
-
-  themeMode: ThemeMode.dark,
-
-  theme: ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.light,
-    colorSchemeSeed: Colors.blue,
-  ),
-
-  darkTheme: ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.dark,
-    colorSchemeSeed: Colors.blue,
-  ),
-
-  home: const DashboardScreen(),
-);
+      title: 'Levels',
+      debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.dark,
+      theme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.light,
+        colorSchemeSeed: Colors.blue,
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorSchemeSeed: Colors.blue,
+      ),
+      home: const DashboardScreen(),
+    );
   }
 }
 
@@ -79,16 +75,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ];
 
   List<Asset> assets = [];
-
   late Future<List<AssetSnapshot>> _snapshots;
-  
-Future<void> _removeAssetBySymbol(String symbol) async {
-  setState(() {
-    assets.removeWhere((a) => a.displaySymbol == symbol);
-    _snapshots = _loadAll();
-  });
-  await _saveAssetsToPrefs(assets);
-}
+
+  /// ✅ Suppression la plus simple et la plus fiable :
+  /// on supprime via une clé stable (Asset.key), pas via un index.
+  Future<void> _removeAssetByKey(String key) async {
+    setState(() {
+      assets.removeWhere((a) => a.key == key);
+      _snapshots = _loadAll();
+    });
+    await _saveAssetsToPrefs(assets);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -162,16 +160,17 @@ Future<void> _removeAssetBySymbol(String symbol) async {
             isScrollControlled: true,
             showDragHandle: true,
             builder: (context) {
-  return SafeArea(
-    child: Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: const AddAssetSheet(),
-    ),
-  );
-},
+              return SafeArea(
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom,
+                  ),
+                  child: const AddAssetSheet(),
+                ),
+              );
+            },
           );
+
           if (added != null) {
             setState(() {
               assets = [...assets, added];
@@ -196,13 +195,39 @@ Future<void> _removeAssetBySymbol(String symbol) async {
               ),
             );
           }
+
           final data = snap.data ?? [];
           return RefreshIndicator(
             onRefresh: _refresh,
             child: ListView(
               padding: const EdgeInsets.all(12),
               children: [
-                for (final s in data) AssetCard(snapshot: s),
+                for (final s in data)
+                  AssetCard(
+                    snapshot: s,
+                    onDelete: () async {
+                      final ok = await showDialog<bool>(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('Supprimer'),
+                          content: Text('Supprimer "${s.symbol}" ?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Annuler'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Supprimer'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (ok == true) {
+                        await _removeAssetByKey(s.key);
+                      }
+                    },
+                  ),
                 const SizedBox(height: 24),
                 const _Footnote(),
               ],
@@ -254,6 +279,16 @@ class Asset {
     this.coinId,
     this.vsCurrency,
   });
+
+  /// ✅ Clé stable utilisée pour suppression + persistance
+  String get key {
+    switch (source) {
+      case AssetSource.stooq:
+        return 'stooq:${(stooqSymbol ?? '').toLowerCase()}';
+      case AssetSource.coingecko:
+        return 'coingecko:${(coinId ?? '').toLowerCase()}:${(vsCurrency ?? 'usd').toLowerCase()}';
+    }
+  }
 
   const Asset.stooq({
     required String title,
@@ -342,19 +377,19 @@ class Asset {
             currentTimestampUtc: now,
           );
           return AssetSnapshot(
-  title: title,
-  symbol: displaySymbol,
-  unit: unit,
-  currentPrice: current,
-  currentTimestampUtc: now,
-  levels: levels,
-  dataNote: "Source: Stooq daily CSV (proxy).",
-  error: null,
-);
+            key: key,
+            title: title,
+            symbol: displaySymbol,
+            unit: unit,
+            currentPrice: current,
+            currentTimestampUtc: now,
+            levels: levels,
+            dataNote: "Source: Stooq daily CSV (proxy).",
+            error: null,
+          );
 
         case AssetSource.coingecko:
-          final priceData =
-              await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
+          final priceData = await _fetchCoinGeckoSimplePrice(coinId!, vsCurrency!);
           final current = priceData.price;
           final now = priceData.timestampUtc;
 
@@ -385,18 +420,20 @@ class Asset {
           );
 
           return AssetSnapshot(
-  title: title,
-  symbol: displaySymbol,
-  unit: unit,
-  currentPrice: current,
-  currentTimestampUtc: now,
-  levels: levels,
-  dataNote: "Source: CoinGecko (/simple/price + /ohlc).",
-  error: null,
-);
+            key: key,
+            title: title,
+            symbol: displaySymbol,
+            unit: unit,
+            currentPrice: current,
+            currentTimestampUtc: now,
+            levels: levels,
+            dataNote: "Source: CoinGecko (/simple/price + /ohlc).",
+            error: null,
+          );
       }
     } catch (e) {
       return AssetSnapshot.error(
+        key: key,
         title: title,
         symbol: displaySymbol,
         unit: unit,
@@ -577,6 +614,7 @@ class RangeLevel {
 enum Zone { buy, neutral, sell }
 
 class AssetSnapshot {
+  final String key; // ✅ clé stable pour suppression
   final String title;
   final String symbol;
   final String unit;
@@ -589,6 +627,7 @@ class AssetSnapshot {
   final String? error;
 
   AssetSnapshot({
+    required this.key,
     required this.title,
     required this.symbol,
     required this.unit,
@@ -600,12 +639,14 @@ class AssetSnapshot {
   });
 
   factory AssetSnapshot.error({
+    required String key,
     required String title,
     required String symbol,
     required String unit,
     required String error,
   }) =>
       AssetSnapshot(
+        key: key,
         title: title,
         symbol: symbol,
         unit: unit,
@@ -619,15 +660,19 @@ class AssetSnapshot {
 
 class AssetCard extends StatelessWidget {
   final AssetSnapshot snapshot;
-  const AssetCard({super.key, required this.snapshot});
+  final VoidCallback onDelete;
+
+  const AssetCard({
+    super.key,
+    required this.snapshot,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final titleStyle =
-        theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
-    final priceStyle =
-        theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+    final titleStyle = theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700);
+    final priceStyle = theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
 
     return Card(
       elevation: 0,
@@ -640,8 +685,12 @@ class AssetCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text('${snapshot.symbol} • ${snapshot.title}',
-                      style: titleStyle),
+                  child: Text('${snapshot.symbol} • ${snapshot.title}', style: titleStyle),
+                ),
+                IconButton(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'Supprimer',
                 ),
                 if (snapshot.error == null)
                   _ZoneChip(
@@ -654,15 +703,13 @@ class AssetCard extends StatelessWidget {
             if (snapshot.error != null)
               Text(
                 'Erreur source: ${snapshot.error}',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.error),
+                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
               )
             else
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}',
-                      style: priceStyle),
+                  Text('${snapshot.unit}${_fmt(snapshot.currentPrice!)}', style: priceStyle),
                   const SizedBox(width: 10),
                   Opacity(
                     opacity: 0.7,
@@ -679,8 +726,7 @@ class AssetCard extends StatelessWidget {
               const SizedBox(height: 10),
               Opacity(
                 opacity: 0.75,
-                child: Text(snapshot.dataNote ?? '',
-                    style: theme.textTheme.bodySmall),
+                child: Text(snapshot.dataNote ?? '', style: theme.textTheme.bodySmall),
               ),
             ],
           ],
@@ -1000,23 +1046,23 @@ Future<List<Candle>> _fetchStooqDailyCandles(String symbol) async {
 
   final rawLines = const LineSplitter().convert(resp.body);
 
-// Nettoyage robuste (BOM, retours Windows, lignes vides)
-final lines = rawLines
-    .map((l) => l.replaceAll('\ufeff', '').trim()) // trim = enlève espaces
-    .where((l) => l.isNotEmpty)                    // enlève vides + "espaces"
-    .toList();
+  // Nettoyage robuste (BOM, retours Windows, lignes vides)
+  final lines = rawLines
+      .map((l) => l.replaceAll('\ufeff', '').trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
 
-if (lines.length < 2) {
-  final preview = lines.isEmpty ? 'EMPTY' : lines.take(3).join(' | ');
-  throw Exception('Stooq CSV too short. First non-empty lines: $preview');
-}
+  if (lines.length < 2) {
+    final preview = lines.isEmpty ? 'EMPTY' : lines.take(3).join(' | ');
+    throw Exception('Stooq CSV too short. First non-empty lines: $preview');
+  }
 
-final header = lines.first.toLowerCase();
-if (!header.contains('date') || !header.contains('close')) {
-  throw Exception(
-    'Stooq CSV invalid header. Preview: ${lines.take(5).join(" | ")}',
-  );
-}
+  final header = lines.first.toLowerCase();
+  if (!header.contains('date') || !header.contains('close')) {
+    throw Exception(
+      'Stooq CSV invalid header. Preview: ${lines.take(5).join(" | ")}',
+    );
+  }
 
   final candles = <Candle>[];
   for (int i = 1; i < lines.length; i++) {
