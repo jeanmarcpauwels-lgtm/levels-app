@@ -643,6 +643,7 @@ enum Zone { buy, neutral, sell }
 class AssetSnapshot {
   final String title;
   final String symbol;
+  final String displaySymbol;
   final String unit;
 
   final double? currentPrice;
