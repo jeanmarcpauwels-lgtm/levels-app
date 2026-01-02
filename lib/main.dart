@@ -246,37 +246,7 @@ Future<void> _removeAssetAt(int index) async {
         },
         child: const Icon(Icons.add),
       ),
-      body: FutureBuilder<List<AssetSnapshot>>(
-        future: _snapshots,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('Erreur: ${snap.error}'),
-              ),
-            );
-          }
-          final data = snap.data ?? [];
-          return RefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView(
-              padding: const EdgeInsets.all(12),
-              children: [
-                for (final s in data) AssetCard(snapshot: s),
-                const SizedBox(height: 24),
-                const _Footnote(),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
+      
 
 class _Footnote extends StatelessWidget {
   const _Footnote();
@@ -656,6 +626,7 @@ class AssetSnapshot {
   AssetSnapshot({
     required this.title,
     required this.symbol,
+    required this.displaySymbol,
     required this.unit,
     required this.currentPrice,
     required this.currentTimestampUtc,
@@ -667,12 +638,14 @@ class AssetSnapshot {
   factory AssetSnapshot.error({
     required String title,
     required String symbol,
+    required String displaySymbol,
     required String unit,
     required String error,
   }) =>
       AssetSnapshot(
         title: title,
         symbol: symbol,
+        displaySymbol: displaySymbol,
         unit: unit,
         currentPrice: null,
         currentTimestampUtc: null,
